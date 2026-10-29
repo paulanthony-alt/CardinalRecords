@@ -1,6 +1,6 @@
 {
   "name": "cardinal-records",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Cardinal Records — a multiplayer record label simulation game",
   "main": "server.js",
   "private": true,
