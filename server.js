@@ -1,0 +1,583 @@
+'use strict';
+const express = require('express');
+const path = require('node:path');
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const { db, tx, UPLOAD_DIR } = require('./src/db');
+const { loadOwners } = require('./src/owners');
+const { ZipWriter, toCsv } = require('./src/zip');
+const G = require('./src/game');
+const { fail, str, int } = G;
+
+loadOwners();
+
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+const SESSION_DAYS = 30;
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 60;
+const MAX_TRACKS_PER_PLAYER = 10;
+const COLORS = ['#E63946', '#F4A261', '#E9C46A', '#2A9D8F', '#48CAE4', '#7B2CBF', '#F72585', '#80ED99', '#FF7B00', '#4361EE'];
+
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(express.json({ limit: '200kb' }));
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'same-origin');
+  next();
+});
+
+// ---------- sessions ----------
+function readCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i > -1 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return null;
+}
+
+function startSession(req, res, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, Date.now());
+  const secure = req.secure ? '; Secure' : '';
+  res.set('Set-Cookie', `cr_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${secure}`);
+}
+
+app.use((req, res, next) => {
+  const token = readCookie(req, 'cr_session');
+  if (token) {
+    const row = db.prepare(
+      'SELECT u.*, s.created_at AS session_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?'
+    ).get(token);
+    if (row && row.active && Date.now() - row.session_at < SESSION_DAYS * G.DAY) {
+      req.user = row;
+      req.token = token;
+      if (!row.last_seen || Date.now() - row.last_seen > 60_000) {
+        db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(Date.now(), row.id);
+      }
+    }
+  }
+  next();
+});
+
+const auth = (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Please sign in' }));
+const ownerOnly = (req, res, next) =>
+  req.user?.role === 'owner' ? next() : res.status(403).json({ error: 'Record Owners only' });
+
+/** Loads the game from :gameId and checks the user belongs to it. */
+function gameFor(req) {
+  const game = G.getGame(int(req.params.gameId, 'Game'));
+  if (req.user.role !== 'owner' && req.user.game_id !== game.id) fail('You are not on this label', 403);
+  return game;
+}
+
+function publicUser(u, { withPin = false } = {}) {
+  const out = {
+    id: u.id, username: u.username, role: u.role, gameId: u.game_id, displayName: u.display_name,
+    roleTitle: u.role_title, bio: u.bio, color: u.color, active: !!u.active, lastSeen: u.last_seen,
+    claimed: u.pin != null, createdAt: u.created_at,
+  };
+  if (withPin) out.pin = u.pin;
+  return out;
+}
+
+// ---------- login (username + PIN, with lockout) ----------
+const attempts = new Map();
+function checkLock(key) {
+  const a = attempts.get(key);
+  if (a && a.until > Date.now()) fail(`Too many wrong PINs. Try again in ${Math.ceil((a.until - Date.now()) / 60000)} min.`, 429);
+}
+function recordFail(key) {
+  const a = attempts.get(key) || { n: 0, until: 0 };
+  a.n += 1;
+  if (a.n >= 5) { a.until = Date.now() + 5 * 60_000; a.n = 0; }
+  attempts.set(key, a);
+}
+
+app.post('/api/login/lookup', (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(str(req.body.username, 'Username', { min: 1, max: 40 }));
+  if (!u) fail('No account with that username. Ask your Record Owner to sign you.', 404);
+  res.json({ username: u.username, displayName: u.display_name, role: u.role, claimed: u.pin != null, color: u.color });
+});
+
+app.post('/api/login', (req, res) => {
+  const username = str(req.body.username, 'Username', { min: 1, max: 40 });
+  const key = username.toLowerCase();
+  checkLock(key);
+  const u = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username);
+  if (!u) fail('Unknown username', 404);
+  if (u.pin == null) fail('This account has no PIN yet. Set one to claim it.', 409);
+  const given = Buffer.from(String(req.body.pin ?? '').padEnd(6, ' '));
+  const real = Buffer.from(String(u.pin).padEnd(6, ' '));
+  if (given.length !== real.length || !crypto.timingSafeEqual(given, real)) {
+    recordFail(key);
+    fail('Wrong PIN', 401);
+  }
+  attempts.delete(key);
+  startSession(req, res, u.id);
+  res.json({ ok: true });
+});
+
+// First sign-in: the player picks their own PIN.
+app.post('/api/claim', (req, res) => {
+  const u = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(str(req.body.username, 'Username', { min: 1, max: 40 }));
+  if (!u) fail('Unknown username', 404);
+  if (u.pin != null) fail('This account is already claimed. Sign in with your PIN.', 409);
+  if (!G.isPin(req.body.pin)) fail('PIN must be 4 to 6 digits');
+  db.prepare('UPDATE users SET pin = ? WHERE id = ? AND pin IS NULL').run(String(req.body.pin), u.id);
+  startSession(req, res, u.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  if (req.token) db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+  res.set('Set-Cookie', 'cr_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
+
+// ---------- me ----------
+app.get('/api/me', auth, (req, res) => {
+  const games = req.user.role === 'owner'
+    ? db.prepare('SELECT * FROM games ORDER BY created_at DESC').all()
+    : db.prepare('SELECT * FROM games WHERE id = ?').all(req.user.game_id ?? -1);
+  res.json({
+    user: publicUser(req.user, { withPin: false }),
+    games: games.map((g) => { const gg = G.getGame(g.id); return { ...gg, clock: G.clock(gg) }; }),
+  });
+});
+
+app.put('/api/me', auth, (req, res) => {
+  const b = req.body;
+  const displayName = str(b.displayName, 'Artist name', { min: 1, max: 40 });
+  const roleTitle = str(b.roleTitle, 'Role', { max: 40 });
+  const bio = str(b.bio, 'Bio', { max: 500 });
+  const color = /^#[0-9a-fA-F]{6}$/.test(b.color || '') ? b.color : req.user.color;
+  db.prepare('UPDATE users SET display_name = ?, role_title = ?, bio = ?, color = ? WHERE id = ?').run(displayName, roleTitle, bio, color, req.user.id);
+  res.json({ ok: true });
+});
+
+app.put('/api/me/pin', auth, (req, res) => {
+  if (String(req.body.currentPin) !== req.user.pin) fail('Current PIN is wrong', 401);
+  if (!G.isPin(req.body.newPin)) fail('New PIN must be 4 to 6 digits');
+  db.prepare('UPDATE users SET pin = ? WHERE id = ?').run(String(req.body.newPin), req.user.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.token);
+  res.json({ ok: true });
+});
+
+app.put('/api/me/tutorial', auth, (req, res) => {
+  let t = {};
+  try { t = JSON.parse(req.user.tutorial || '{}'); } catch {}
+  t.done = t.done || {};
+  const step = str(req.body.step, 'Step', { min: 1, max: 40 });
+  if (req.body.done) t.done[step] = Date.now(); else delete t.done[step];
+  if (req.body.completed === true && !t.completedAt) {
+    t.completedAt = Date.now();
+    if (req.user.game_id) G.post(req.user.game_id, 'release', req.user.id, `${req.user.display_name} finished the Release Guide and is ready to go live on streaming!`);
+  }
+  if (req.body.completed === false) delete t.completedAt;
+  db.prepare('UPDATE users SET tutorial = ? WHERE id = ?').run(JSON.stringify(t), req.user.id);
+  res.json({ ok: true, tutorial: t });
+});
+
+// ---------- games (owner) ----------
+function gameSettings(b, existing) {
+  const out = {
+    name: str(b.name ?? existing?.name, 'Label season name', { min: 1, max: 60 }),
+    duration_days: int(b.durationDays ?? existing?.duration_days, 'Season length', { min: 1, max: G.MAX_DAYS }),
+    starting_balance: int(b.startingBalance ?? existing?.starting_balance ?? 0, 'Signing advance', { min: 0, max: 100_000_000 }),
+    label_cut_pct: int(b.labelCutPct ?? existing?.label_cut_pct ?? 10, 'Label cut', { min: 0, max: 50 }),
+    max_players: int(b.maxPlayers ?? existing?.max_players ?? G.MAX_PLAYERS, 'Max players', { min: 1, max: G.MAX_PLAYERS }),
+  };
+  return out;
+}
+
+app.post('/api/games', auth, ownerOnly, (req, res) => {
+  const s = gameSettings(req.body);
+  const { lastInsertRowid } = db.prepare(
+    "INSERT INTO games (name, status, duration_days, starting_balance, label_cut_pct, max_players, created_by, created_at) VALUES (?, 'setup', ?, ?, ?, ?, ?, ?)"
+  ).run(s.name, s.duration_days, s.starting_balance, s.label_cut_pct, s.max_players, req.user.id, Date.now());
+  const id = Number(lastInsertRowid);
+  G.post(id, 'phase', req.user.id, `${s.name} has been founded. Signing artists now.`);
+  res.json({ id });
+});
+
+app.patch('/api/games/:gameId', auth, ownerOnly, (req, res) => {
+  const game = gameFor(req);
+  const s = gameSettings(req.body, game);
+  const playerCount = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1").get(game.id).n;
+  if (s.max_players < playerCount) fail(`There are already ${playerCount} artists on this roster`);
+  if (game.status === 'active' && s.duration_days < G.clock(game).day) fail('The season is already past that day');
+  db.prepare('UPDATE games SET name = ?, duration_days = ?, starting_balance = ?, label_cut_pct = ?, max_players = ? WHERE id = ?').run(
+    s.name, s.duration_days, s.starting_balance, s.label_cut_pct, s.max_players, game.id
+  );
+  if (s.duration_days !== game.duration_days) G.post(game.id, 'phase', req.user.id, `The season is now ${s.duration_days} days long.`);
+  res.json({ ok: true });
+});
+
+app.post('/api/games/:gameId/phase', auth, ownerOnly, (req, res) => {
+  const game = gameFor(req);
+  const phase = req.body.phase;
+  const allowed = { setup: ['active'], active: ['showcase'], showcase: ['archived', 'active'], archived: ['showcase'] };
+  if (!allowed[game.status]?.includes(phase)) fail(`Can't move from ${game.status} to ${phase}`);
+  tx(() => {
+    if (phase === 'active' && game.status === 'setup') {
+      db.prepare("UPDATE games SET status = 'active', started_at = ? WHERE id = ?").run(Date.now(), game.id);
+      const players = db.prepare("SELECT id FROM users WHERE role = 'player' AND game_id = ? AND active = 1").all(game.id);
+      for (const p of players) G.payAdvance(game, p.id);
+      G.post(game.id, 'phase', req.user.id, `Day 1. The season is LIVE${game.starting_balance ? `: every artist received a ${G.fmt$(game.starting_balance)} signing advance` : ''}. Make some deals.`);
+    } else if (phase === 'active') {
+      // Reopen a wrapped season: needs room left on the clock.
+      if (Date.now() >= game.started_at + game.duration_days * G.DAY) fail('Extend the season length first, then reopen it');
+      db.prepare("UPDATE games SET status = 'active', ended_at = NULL WHERE id = ?").run(game.id);
+      G.post(game.id, 'phase', req.user.id, 'The season is back on. Deals are open again.');
+    } else if (phase === 'showcase') {
+      db.prepare("UPDATE games SET status = 'showcase', ended_at = COALESCE(ended_at, ?) WHERE id = ?").run(Date.now(), game.id);
+      G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : 'The Record Owner called the season. The Showcase is open: upload your music!');
+    } else if (phase === 'archived') {
+      db.prepare("UPDATE games SET status = 'archived' WHERE id = ?").run(game.id);
+      G.post(game.id, 'phase', req.user.id, 'This season has been archived. Thanks for playing Cardinal Records.');
+    }
+  });
+  res.json({ ok: true });
+});
+
+// ---------- roster (owner) ----------
+app.post('/api/games/:gameId/players', auth, ownerOnly, (req, res) => {
+  const game = gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const username = str(req.body.username, 'Username', { min: 3, max: 24 });
+  if (!G.isUsername(username)) fail('Usernames are 3-24 letters, numbers, dots, dashes or underscores');
+  if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) fail('That username is taken');
+  const count = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1").get(game.id).n;
+  if (count >= game.max_players) fail(`Roster is full (${game.max_players} artists max)`);
+  const displayName = str(req.body.displayName || username, 'Artist name', { min: 1, max: 40 });
+  const roleTitle = str(req.body.roleTitle, 'Role', { max: 40 });
+  const id = tx(() => {
+    const { lastInsertRowid } = db.prepare(
+      "INSERT INTO users (username, role, game_id, display_name, role_title, color, created_at) VALUES (?, 'player', ?, ?, ?, ?, ?)"
+    ).run(username, game.id, displayName, roleTitle, COLORS[count % COLORS.length], Date.now());
+    const pid = Number(lastInsertRowid);
+    if (game.status === 'active') G.payAdvance(game, pid);
+    G.post(game.id, 'join', pid, `${displayName} signed to the label${roleTitle ? ` as ${roleTitle}` : ''}.`);
+    return pid;
+  });
+  res.json({ id });
+});
+
+function ownedPlayer(req) {
+  const p = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'player'").get(int(req.params.userId, 'Player'));
+  if (!p) fail('Player not found', 404);
+  return p;
+}
+
+app.patch('/api/players/:userId', auth, ownerOnly, (req, res) => {
+  const p = ownedPlayer(req);
+  const username = req.body.username != null ? str(req.body.username, 'Username', { min: 3, max: 24 }) : p.username;
+  if (!G.isUsername(username)) fail('Usernames are 3-24 letters, numbers, dots, dashes or underscores');
+  const clash = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, p.id);
+  if (clash) fail('That username is taken');
+  const displayName = req.body.displayName != null ? str(req.body.displayName, 'Artist name', { min: 1, max: 40 }) : p.display_name;
+  const roleTitle = req.body.roleTitle != null ? str(req.body.roleTitle, 'Role', { max: 40 }) : p.role_title;
+  let active = p.active;
+  if (req.body.active != null) {
+    active = req.body.active ? 1 : 0;
+    if (active && !p.active) {
+      const g = G.getGame(p.game_id);
+      const count = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1").get(g.id).n;
+      if (count >= g.max_players) fail('Roster is full');
+    }
+  }
+  db.prepare('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ? WHERE id = ?').run(username, displayName, roleTitle, active, p.id);
+  if (!active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(p.id);
+  res.json({ ok: true });
+});
+
+// Clears the PIN; the player sets a new one on next sign-in.
+app.post('/api/players/:userId/reset-pin', auth, ownerOnly, (req, res) => {
+  const p = ownedPlayer(req);
+  db.prepare('UPDATE users SET pin = NULL WHERE id = ?').run(p.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(p.id);
+  res.json({ ok: true });
+});
+
+// ---------- treasury (owner) ----------
+app.post('/api/games/:gameId/grants', auth, ownerOnly, (req, res) => {
+  const game = gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const amount = int(req.body.amount, 'Amount', { min: -100_000_000, max: 100_000_000 });
+  if (amount === 0) fail('Amount cannot be zero');
+  const memo = str(req.body.memo, 'Memo', { max: 140 });
+  let ids = req.body.userIds === 'all'
+    ? db.prepare("SELECT id FROM users WHERE role = 'player' AND game_id = ? AND active = 1").all(game.id).map((r) => r.id)
+    : (Array.isArray(req.body.userIds) ? req.body.userIds : []).map((v) => int(v, 'Player'));
+  if (!ids.length) fail('Pick at least one artist');
+  tx(() => {
+    for (const id of ids) {
+      const p = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'player' AND game_id = ?").get(id, game.id);
+      if (!p) fail('One of those artists is not on this roster');
+      if (amount < 0 && G.balanceOf(p.id) + amount < 0) fail(`${p.display_name} only has ${G.fmt$(G.balanceOf(p.id))}`);
+      G.ledgerEntry(game.id, p.id, amount, amount > 0 ? 'grant' : 'fine', { memo, by: req.user.id });
+    }
+    const who = req.body.userIds === 'all' ? 'every artist' : ids.map(G.nameOf).join(', ');
+    G.post(game.id, amount > 0 ? 'grant' : 'fine', req.user.id,
+      amount > 0 ? `The label granted ${G.fmt$(amount)} to ${who}${memo ? `: ${memo}` : ''}.`
+                 : `The label fined ${who} ${G.fmt$(-amount)}${memo ? `: ${memo}` : ''}.`);
+  });
+  res.json({ ok: true });
+});
+
+// ---------- full game state ----------
+app.get('/api/games/:gameId/state', auth, (req, res) => {
+  const game = gameFor(req);
+  const isOwner = req.user.role === 'owner';
+  const me = req.user;
+
+  const roster = G.playerStats(game).map((r) => ({
+    ...publicUser(r.player, { withPin: isOwner }), stats: r.stats, progress: r.progress, badges: r.badges,
+    tutorial: r.player.id === me.id || isOwner ? r.tutorial : undefined,
+  }));
+
+  const services = db.prepare('SELECT * FROM services WHERE game_id = ? ORDER BY created_at DESC').all(game.id).map((s) => ({
+    id: s.id, userId: s.user_id, title: s.title, description: s.description, category: s.category,
+    price: s.price, turnaroundDays: s.turnaround_days, active: !!s.active, createdAt: s.created_at,
+  }));
+
+  const pub = G.PUBLIC_STATUSES.map((s) => `'${s}'`).join(',');
+  const contracts = (isOwner
+    ? db.prepare('SELECT * FROM contracts WHERE game_id = ? ORDER BY updated_at DESC').all(game.id)
+    : db.prepare(`SELECT * FROM contracts WHERE game_id = ? AND (buyer_id = ? OR seller_id = ? OR status IN (${pub})) ORDER BY updated_at DESC`).all(game.id, me.id, me.id)
+  );
+  const evStmt = db.prepare('SELECT * FROM contract_events WHERE contract_id = ? ORDER BY created_at');
+  const contractsOut = contracts.map((c) => {
+    const party = isOwner || c.buyer_id === me.id || c.seller_id === me.id;
+    return {
+      id: c.id, buyerId: c.buyer_id, sellerId: c.seller_id, serviceId: c.service_id, title: c.title,
+      terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
+      rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
+      events: party ? evStmt.all(c.id).map((e) => ({ actorId: e.actor_id, action: e.action, note: e.note, amount: e.amount, at: e.created_at })) : [],
+    };
+  });
+
+  const feed = db.prepare('SELECT * FROM feed WHERE game_id = ? ORDER BY created_at DESC, id DESC LIMIT 150').all(game.id)
+    .map((f) => ({ id: f.id, kind: f.kind, actorId: f.actor_id, message: f.message, at: f.created_at }));
+
+  const myLikes = new Set(db.prepare('SELECT track_id FROM track_likes WHERE user_id = ?').all(me.id).map((r) => r.track_id));
+  const tracks = db.prepare(
+    'SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY created_at DESC'
+  ).all(game.id).map((t) => ({
+    id: t.id, userId: t.user_id, title: t.title, genre: t.genre, description: t.description, credits: t.credits,
+    mime: t.mime, size: t.size, plays: t.plays, likes: t.likes, liked: myLikes.has(t.id), createdAt: t.created_at,
+  }));
+
+  const ledgerRows = isOwner
+    ? db.prepare('SELECT * FROM ledger WHERE game_id = ? ORDER BY id DESC LIMIT 500').all(game.id)
+    : db.prepare('SELECT * FROM ledger WHERE game_id = ? AND user_id = ? ORDER BY id DESC LIMIT 300').all(game.id, me.id);
+  const vault = db.prepare('SELECT COALESCE(SUM(amount), 0) AS v FROM ledger WHERE game_id = ? AND user_id IS NULL').get(game.id).v;
+  const owners = db.prepare("SELECT id, display_name, color FROM users WHERE role = 'owner'").all()
+    .map((o) => ({ id: o.id, displayName: o.display_name, color: o.color }));
+
+  res.json({
+    game: { ...game, clock: G.clock(game) },
+    roster, owners, services, contracts: contractsOut, feed, tracks, vault,
+    ledger: ledgerRows.map((l) => ({ id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at })),
+    serverTime: Date.now(),
+  });
+});
+
+// ---------- lobby chat ----------
+app.post('/api/games/:gameId/feed', auth, (req, res) => {
+  const game = gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const message = str(req.body.message, 'Message', { min: 1, max: 280 });
+  const kind = req.user.role === 'owner' ? 'announcement' : 'chat';
+  G.post(game.id, kind, req.user.id, message);
+  res.json({ ok: true });
+});
+
+// ---------- services ----------
+const CATEGORIES = ['Production', 'Beat', 'Vocals', 'Songwriting', 'Mixing', 'Mastering', 'Instrument', 'Artwork', 'Video', 'Marketing', 'Other'];
+
+function serviceFields(b, existing) {
+  return {
+    title: str(b.title ?? existing?.title, 'Service name', { min: 1, max: 80 }),
+    description: str(b.description ?? existing?.description, 'Description', { max: 1000 }),
+    category: CATEGORIES.includes(b.category) ? b.category : existing?.category || 'Other',
+    price: int(b.price ?? existing?.price, 'Price', { min: 1, max: 100_000_000 }),
+    turnaround_days: int(b.turnaroundDays ?? existing?.turnaround_days ?? 7, 'Turnaround', { min: 1, max: G.MAX_DAYS }),
+  };
+}
+
+app.post('/api/games/:gameId/services', auth, (req, res) => {
+  const game = gameFor(req);
+  if (req.user.role !== 'player') fail('Only artists can list services', 403);
+  if (!['setup', 'active'].includes(game.status)) fail('The marketplace is closed for this season');
+  const count = db.prepare('SELECT COUNT(*) AS n FROM services WHERE user_id = ? AND active = 1').get(req.user.id).n;
+  if (count >= 12) fail('You can list up to 12 services');
+  const s = serviceFields(req.body);
+  const { lastInsertRowid } = db.prepare(
+    'INSERT INTO services (game_id, user_id, title, description, category, price, turnaround_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(game.id, req.user.id, s.title, s.description, s.category, s.price, s.turnaround_days, Date.now());
+  G.post(game.id, 'service', req.user.id, `${req.user.display_name} is offering ${s.category.toLowerCase()}: "${s.title}" from ${G.fmt$(s.price)}.`);
+  res.json({ id: Number(lastInsertRowid) });
+});
+
+app.patch('/api/services/:serviceId', auth, (req, res) => {
+  const s = db.prepare('SELECT * FROM services WHERE id = ?').get(int(req.params.serviceId, 'Service'));
+  if (!s) fail('Service not found', 404);
+  if (s.user_id !== req.user.id && req.user.role !== 'owner') fail('Not your service', 403);
+  const f = serviceFields(req.body, s);
+  const active = req.body.active != null ? (req.body.active ? 1 : 0) : s.active;
+  db.prepare('UPDATE services SET title = ?, description = ?, category = ?, price = ?, turnaround_days = ?, active = ? WHERE id = ?').run(
+    f.title, f.description, f.category, f.price, f.turnaround_days, active, s.id
+  );
+  res.json({ ok: true });
+});
+
+// ---------- contracts ----------
+app.post('/api/games/:gameId/contracts', auth, (req, res) => {
+  const game = gameFor(req);
+  if (req.user.role !== 'player') fail('Only artists can make offers', 403);
+  res.json({ id: G.createContract(game, req.user, req.body) });
+});
+
+app.post('/api/contracts/:contractId/action', auth, (req, res) => {
+  const c = db.prepare('SELECT game_id FROM contracts WHERE id = ?').get(int(req.params.contractId, 'Contract'));
+  if (!c) fail('Contract not found', 404);
+  if (req.user.role !== 'owner' && req.user.game_id !== c.game_id) fail('Not your label', 403);
+  res.json({ id: G.contractAction(req.user, Number(req.params.contractId), req.body) });
+});
+
+// ---------- tracks / showcase ----------
+const AUDIO_EXT = { 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav',
+  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/webm': 'webm' };
+
+app.post('/api/games/:gameId/tracks', auth, express.raw({ type: () => true, limit: `${MAX_UPLOAD_MB}mb` }), (req, res) => {
+  const game = gameFor(req);
+  if (req.user.role !== 'player') fail('Only artists can upload music', 403);
+  if (game.status !== 'showcase') fail('Uploads open when the season wraps and the Showcase begins');
+  const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  const ext = AUDIO_EXT[mime];
+  if (!ext) fail('Upload an audio file: MP3, WAV, M4A, AAC, OGG or FLAC');
+  if (!Buffer.isBuffer(req.body) || req.body.length < 1000) fail('That file looks empty');
+  const count = db.prepare('SELECT COUNT(*) AS n FROM tracks WHERE user_id = ?').get(req.user.id).n;
+  if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can upload up to ${MAX_TRACKS_PER_PLAYER} tracks`);
+  const q = req.query;
+  const title = str(q.title, 'Track title', { min: 1, max: 100 });
+  const genre = str(q.genre, 'Genre', { max: 40 });
+  const description = str(q.description, 'Description', { max: 1000 });
+  const credits = str(q.credits, 'Credits', { max: 1000 });
+  const filename = `${game.id}-${req.user.id}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.body);
+  const { lastInsertRowid } = db.prepare(
+    'INSERT INTO tracks (game_id, user_id, title, genre, description, credits, filename, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(game.id, req.user.id, title, genre, description, credits, filename, mime, req.body.length, Date.now());
+  G.post(game.id, 'track', req.user.id, `${req.user.display_name} dropped a new track: "${title}". Go give it a listen.`);
+  res.json({ id: Number(lastInsertRowid) });
+});
+
+function trackFor(req) {
+  const t = db.prepare('SELECT * FROM tracks WHERE id = ?').get(int(req.params.trackId, 'Track'));
+  if (!t) fail('Track not found', 404);
+  if (req.user.role !== 'owner' && req.user.game_id !== t.game_id) fail('Not your label', 403);
+  return t;
+}
+
+app.get('/api/tracks/:trackId/audio', auth, (req, res) => {
+  const t = trackFor(req);
+  res.sendFile(path.join(UPLOAD_DIR, t.filename), { headers: { 'Content-Type': t.mime, 'Cache-Control': 'private, max-age=3600' } });
+});
+
+app.post('/api/tracks/:trackId/play', auth, (req, res) => {
+  const t = trackFor(req);
+  if (t.user_id !== req.user.id) db.prepare('UPDATE tracks SET plays = plays + 1 WHERE id = ?').run(t.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/tracks/:trackId/like', auth, (req, res) => {
+  const t = trackFor(req);
+  if (t.user_id === req.user.id) fail("You can't like your own track");
+  const had = db.prepare('SELECT 1 FROM track_likes WHERE track_id = ? AND user_id = ?').get(t.id, req.user.id);
+  if (had) db.prepare('DELETE FROM track_likes WHERE track_id = ? AND user_id = ?').run(t.id, req.user.id);
+  else db.prepare('INSERT INTO track_likes (track_id, user_id) VALUES (?, ?)').run(t.id, req.user.id);
+  res.json({ liked: !had });
+});
+
+app.delete('/api/tracks/:trackId', auth, (req, res) => {
+  const t = trackFor(req);
+  if (t.user_id !== req.user.id && req.user.role !== 'owner') fail('Not your track', 403);
+  db.prepare('DELETE FROM tracks WHERE id = ?').run(t.id);
+  fs.rm(path.join(UPLOAD_DIR, t.filename), { force: true }, () => {});
+  res.json({ ok: true });
+});
+
+// ---------- export (anyone on the label, any time) ----------
+function exportData(game, isOwner) {
+  const users = db.prepare("SELECT * FROM users WHERE role = 'player' AND game_id = ? ORDER BY id").all(game.id);
+  const stats = new Map(G.playerStats(game).map((r) => [r.player.id, r]));
+  return {
+    exportedAt: new Date().toISOString(),
+    game: { ...game, clock: G.clock(game) },
+    players: users.map((u) => {
+      const s = stats.get(u.id);
+      const row = {
+        id: u.id, username: u.username, display_name: u.display_name, role_title: u.role_title, bio: u.bio, active: u.active,
+        balance: s.stats.balance, escrow: s.stats.escrow, net_worth: s.stats.netWorth, earned: s.stats.earned, spent: s.stats.spent,
+        deals_sold: s.stats.dealsSold, deals_bought: s.stats.dealsBought, rating: s.stats.rating, level: s.progress.level,
+        xp: s.progress.xp, title: s.progress.title, tracks: s.stats.tracks, likes: s.stats.likes,
+        badges: s.badges.map((b) => b.name).join('; '), joined_at: new Date(u.created_at).toISOString(),
+      };
+      if (isOwner) row.pin = u.pin;
+      return row;
+    }),
+    ledger: db.prepare('SELECT * FROM ledger WHERE game_id = ? ORDER BY id').all(game.id),
+    services: db.prepare('SELECT * FROM services WHERE game_id = ? ORDER BY id').all(game.id),
+    contracts: db.prepare('SELECT * FROM contracts WHERE game_id = ? ORDER BY id').all(game.id),
+    contract_events: db.prepare('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.id').all(game.id),
+    feed: db.prepare('SELECT * FROM feed WHERE game_id = ? ORDER BY id').all(game.id),
+    tracks: db.prepare('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id').all(game.id),
+  };
+}
+
+const slug = (s) => String(s).replace(/[^a-zA-Z0-9 _-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'untitled';
+
+app.get('/api/games/:gameId/export.json', auth, (req, res) => {
+  const game = gameFor(req);
+  res.set('Content-Disposition', `attachment; filename="cardinal-records-${slug(game.name)}-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.json(exportData(game, req.user.role === 'owner'));
+});
+
+app.get('/api/games/:gameId/export.zip', auth, (req, res) => {
+  const game = gameFor(req);
+  const data = exportData(game, req.user.role === 'owner');
+  const base = `cardinal-records-${slug(game.name)}-${new Date().toISOString().slice(0, 10)}`;
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${base}.zip"`);
+  const zip = new ZipWriter(res);
+  zip.add(`${base}/data.json`, JSON.stringify(data, null, 2));
+  for (const table of ['players', 'ledger', 'services', 'contracts', 'contract_events', 'feed', 'tracks']) {
+    zip.add(`${base}/csv/${table}.csv`, toCsv(data[table]));
+  }
+  if (req.query.audio !== '0') {
+    const names = new Map(data.players.map((p) => [p.id, p.display_name]));
+    for (const t of data.tracks) {
+      const file = path.join(UPLOAD_DIR, t.filename);
+      if (!fs.existsSync(file)) continue;
+      zip.add(`${base}/music/${slug(names.get(t.user_id))} - ${slug(t.title)}-${t.id}.${t.filename.split('.').pop()}`, fs.readFileSync(file), { store: true });
+    }
+  }
+  zip.finish();
+});
+
+// ---------- static app ----------
+app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: `File too large (max ${MAX_UPLOAD_MB} MB)` });
+  if (err.status && err.status < 500) return res.status(err.status).json({ error: err.message });
+  console.error(err);
+  res.status(500).json({ error: 'Something went wrong on the server' });
+});
+
+app.listen(PORT, () => console.log(`Cardinal Records is live on http://localhost:${PORT}`));
