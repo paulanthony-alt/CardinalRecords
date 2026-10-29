@@ -184,9 +184,10 @@ function modal(html, { wide = false } = {}) {
 }
 const closeModal = () => { $('#modal-root').innerHTML = ''; };
 const modalOpen = () => !!$('#modal-root').firstChild;
+const closeX = '<svg width="8" height="7" viewBox="0 0 8 7" aria-hidden="true"><path d="M0 0h2l2 2 2-2h2L5 3.5 8 7H6L4 5 2 7H0l3-3.5z" fill="#000"/></svg>';
 const modalHead = (title, sub = '') => `
-  <div class="modal-head"><div><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div>
-  <button type="button" class="btn ghost icon x" data-act="close-modal" aria-label="Close">${icon('x')}</button></div>`;
+  <div class="tb modal-head"><span class="t">${title}</span><button type="button" class="tbtn" data-act="close-modal" aria-label="Close">${closeX}</button></div>
+  ${sub ? `<p class="modal-sub">${sub}</p>` : ''}`;
 
 // ============================================================ small components
 function avatar(p, cls = '') {
@@ -250,15 +251,13 @@ function stepper(c, mini = false) {
 function contractCard(c) {
   const acts = actionsFor(c);
   const needs = needsMe(c);
-  return `<article class="contract st-${c.status} ${needs ? 'needs' : ''}" data-act="nav" data-to="#/contract/${c.id}">
-    <div class="c-top"><span class="c-no">${cno(c.id)}</span>${needs ? '<span class="needs-tag">Your move</span>' : ''}<span class="status s-${c.status}">${STATUS[c.status]}</span></div>
-    <h4>${esc(c.title)}</h4>
-    <div class="parties">${nameLine(c.buyerId)}<span>hired</span>${nameLine(c.sellerId)}</div>
-    <div class="c-mid"><div class="c-amt"><small>${c.status === 'completed' ? 'Paid' : 'Deal value'}</small>${money(c.amount)}</div>
-      ${c.dueDays ? `<span class="dim" style="font-size:12.5px">${icon('clock')} ${plural(c.dueDays, 'day')}</span>` : ''}</div>
-    ${stepper(c, true)}
+  return `<div class="it contract st-${c.status} ${needs ? 'sel' : ''}" data-act="nav" data-to="#/contract/${c.id}">
+    <span class="chip s-${c.status}">${STATUS[c.status]}</span>
+    <div class="it-main"><div><b>${esc(c.title)}</b> <span class="c-no mono">${cno(c.id)}</span>${needs ? ' <span class="needs-tag">Your move</span>' : ''}</div>
+      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.dueDays ? ` · due in ${plural(c.dueDays, 'day')}` : ''}</div></div>
+    <div class="it-amt mono">${money(c.amount)}</div>
     ${acts.length ? `<div class="c-actions">${acts.slice(0, 3).map(([a, l, k]) => `<button class="btn sm ${k}" data-act="contract" data-id="${c.id}" data-a="${a}">${l}</button>`).join('')}</div>` : ''}
-  </article>`;
+  </div>`;
 }
 
 // ============================================================ login
@@ -286,14 +285,18 @@ function loginView() {
       <div class="keypad">${keys.map((k) => `<button type="button" class="${k === 'ok' ? 'ok' : k === 'del' ? 'del' : ''}" data-act="pin-key" data-k="${k}" aria-label="${k === 'ok' ? 'Submit' : k === 'del' ? 'Delete' : k}">${k === 'ok' ? icon('check') : k === 'del' ? 'Delete' : k}</button>`).join('')}</div>
       <p class="hint">You can also type on your keyboard.</p>`;
   }
+  const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   return `<div class="login">
-    <div class="login-art">
-      <div class="record"><img src="/logo.svg" alt="" /></div>
-      <h1>CARDINAL<br/><em>RECORDS</em></h1>
-      <p>Run your corner of the label. Sell your skills, hire your labelmates, stack your cash, and drop your music.</p>
-      <div class="login-steps"><span>Sign</span><span>Collaborate</span><span>Get paid</span><span>Release</span></div>
+    <div class="win login-win" role="dialog" aria-labelledby="login-t">
+      <div class="tb"><span class="t" id="login-t">Log On to Cardinal Records</span></div>
+      <div class="login-body">
+        <div class="login-art">${bird(56)}<h1>Cardinal<br/>Records</h1>
+          <p>Run your corner of the label. Sell your skills, hire your labelmates, stack your cash, and drop your music.</p>
+          <div class="login-steps"><span class="chip">Sign</span><span class="chip">Collaborate</span><span class="chip">Get paid</span><span class="chip">Release</span></div></div>
+        <div class="login-card">${card}</div>
+      </div>
     </div>
-    <div class="login-panel"><div class="login-card"><div class="brand-sm"><img src="/logo.svg" width="26" height="26" alt="" />Cardinal Records</div>${card}</div></div>
+    <footer class="taskbar raised"><span class="btn start">${bird(16)}Cardinal</span><span style="flex:1"></span><span class="well tw">${today}</span><span class="well tw" id="clock">${clockText()}</span></footer>
   </div>`;
 }
 
@@ -319,7 +322,9 @@ async function submitPin() {
       await api('POST', '/api/login', { username: L.info.username, pin: L.pin });
     }
     S.login = freshLogin();
-    await start();
+    await setInterval(() => { const c = $('#clock'); if (c) c.textContent = clockText(); }, 20_000);
+
+start();
   } catch (e) {
     L.pin = ''; L.error = e.message; render(); shakePin();
   }
@@ -332,12 +337,12 @@ function navItems() {
   const contractsNeeding = st ? st.contracts.filter(needsMe).length : 0;
   const review = st ? st.contracts.filter((c) => c.status === 'review').length : 0;
   const items = [];
-  if (isOwner()) items.push({ group: 'Record Owner' }, { to: 'console', label: 'Label Console', ic: 'shield', count: review });
+  if (isOwner()) items.push({ group: 'Record Owner' }, { to: 'console', label: 'Console', ic: 'shield', count: review });
   items.push(
     { group: 'The Label' },
     { to: 'hq', label: 'HQ', ic: 'home' },
     { to: 'lobby', label: 'Lobby', ic: 'message' },
-    { to: 'market', label: 'Marketplace', ic: 'bag' },
+    { to: 'market', label: 'Market', ic: 'bag' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
@@ -345,49 +350,69 @@ function navItems() {
     { to: 'showcase', label: 'Showcase', ic: 'music' },
     { to: 'guide', label: 'Release Guide', ic: 'map' },
     { group: 'You' },
-    { to: 'data', label: 'Data & Export', ic: 'download' },
+    { to: 'data', label: 'Data', ic: 'download' },
     { to: 'profile', label: 'Profile', ic: 'user' },
   );
   return items;
 }
 
+const BIRD = '<path d="M1 31 L9 24 C5 19 8 13 13 12 L11 3 L18 9 C21 6 26 8 27 12 L32 14 L27 16 C28 24 20 29 11 28 Z"/>';
+const bird = (size = 16, cls = '') => `<svg class="bird ${cls}" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">${BIRD}</svg>`;
+
+/** The taskbar's red button does the most useful next thing for this person. */
+function taskAction() {
+  const st = S.state;
+  if (!st) return isOwner() ? ['Create a season', '#/console'] : null;
+  if (isOwner()) {
+    const n = st.contracts.filter((c) => c.status === 'review').length;
+    return [n ? `Review queue (${n})` : 'Label Console', '#/console'];
+  }
+  const n = st.contracts.filter(needsMe).length;
+  if (n) return [`Your move (${n})`, '#/contracts'];
+  if (uploadsOpen() && !me()?.stats.tracks) return ['Upload music', null, 'upload'];
+  if (live()) return ['Make a deal', '#/market'];
+  if (['showcase', 'archived'].includes(st.game.status)) return ['Release Guide', '#/guide'];
+  return ['List a service', '#/market'];
+}
+
+const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
 function shellView(view) {
   const g = game();
   const route = currentRoute()[0];
   const navRoute = { contract: 'contracts', artist: 'roster' }[route] || route;
-  const nav = navItems().map((it) => it.group
-    ? `<div class="nav-group">${it.group}</div>`
-    : `<a href="#/${it.to}" class="${navRoute === it.to ? 'on' : ''}">${icon(it.ic)}${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('');
+  const nav = navItems().filter((it) => !it.group).map((it) =>
+    `<a href="#/${it.to}" class="mi ${navRoute === it.to ? 'on' : ''}">${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('');
   const switcher = isOwner() && S.games.length
-    ? `<div class="game-switch"><select data-change="switch-game" aria-label="Label season">${S.games.map((x) => `<option value="${x.id}" ${x.id === S.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>`
-    : '';
+    ? `<select class="season-pick" data-change="switch-game" aria-label="Label season">${S.games.map((x) => `<option value="${x.id}" ${x.id === S.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`
+    : g ? `<span class="season-name">${esc(g.name)}</span>` : '';
   const m = me();
-  let top = '';
+  const u = S.user;
+  const wells = [];
   if (g) {
     const c = g.clock;
-    const dayTxt = g.status === 'setup' ? `<b>0</b><span>/ ${c.totalDays}</span><i>Not started</i>` : `<b>${c.day}</b><span>/ ${c.totalDays}</span><i>${g.status === 'active' ? `${plural(c.daysLeft, 'day')} left` : 'Season wrapped'}</i>`;
-    top = `
-      <div class="season"><div class="season-name">${esc(g.name)}</div><span class="phase phase-${g.status}">${phaseLabel[g.status]}</span></div>
-      <div class="daybox"><div class="day">DAY ${dayTxt}</div><div class="bar"><i style="width:${g.status === 'setup' ? 0 : c.pct}%"></i></div></div>
-      ${m ? `<div class="cash-chip"><small>Cash</small><b>${money(m.stats.balance)}</b></div>
-        <a href="#/profile" class="lvl-chip"><span class="ring" style="--p:${Math.round((m.progress.levelXp / m.progress.levelSpan) * 100)}"><span>${m.progress.level}</span></span><span class="t"><small>Level ${m.progress.level}</small><b>${esc(m.progress.title)}</b></span></a>`
-        : `<div class="cash-chip"><small>Label vault</small><b>${money(S.state.vault)}</b></div>`}`;
-  } else {
-    top = `<div class="season"><div class="season-name">Cardinal Records</div><span class="phase phase-archived">No season</span></div>`;
+    wells.push(`<span class="well tw phase-${g.status}" title="Season phase">${phaseLabel[g.status]}</span>`);
+    wells.push(m ? `<span class="well tw cash" title="Cash on hand">Cash ${money(m.stats.balance)}</span>` : `<span class="well tw cash" title="Label vault">Vault ${money(S.state.vault)}</span>`);
+    wells.push(`<span class="well tw" title="${g.status === 'active' ? `${plural(c.daysLeft, 'day')} left` : ''}">Day ${g.status === 'setup' ? 0 : c.day} of ${c.totalDays}</span>`);
+    if (m) wells.push(`<a class="well tw lvl" href="#/profile" title="${m.progress.levelXp} / ${m.progress.levelSpan} XP to the next level">Lv ${m.progress.level} ${esc(m.progress.title)}</a>`);
   }
-  const u = S.user;
+  const ta = taskAction();
+  const taBtn = ta ? (ta[2] ? `<button class="btn go task-go" data-act="${ta[2]}">${ta[0]}</button>` : `<a class="btn go task-go" href="${ta[1]}">${ta[0]}</a>`) : '';
   return `<div class="shell">
-    <aside class="sidebar" id="sidebar">
-      <a class="brand" href="#/hq"><img src="/logo.svg" alt="" /><span><b>CARDINAL</b><small>Records</small></span></a>
-      ${switcher}
-      <nav class="nav">${nav}</nav>
-      <div class="sidebar-foot">${avatar({ ...u, ...(m || {}) })}<div class="who-sm"><b>${esc(m?.displayName || u.displayName)}</b><small>@${esc(u.username)}</small></div>
-        <button class="btn ghost icon" data-act="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button></div>
-    </aside>
-    <div class="main">
-      <header class="topbar"><button class="btn ghost icon menu-btn" data-act="toggle-nav" aria-label="Menu">${icon('menu')}</button>${top}</header>
-      <section class="view" id="view">${u.startingPin && currentRoute()[0] !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn primary" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
-    </div>
+    <header class="menubar raised">
+      <a class="brand" href="#/hq">${bird(18)}Cardinal Records</a>
+      <nav class="menu" aria-label="Main">${nav}</nav>
+      <div class="menu-right">${switcher}
+        <span class="who-name">${esc(m?.displayName || u.displayName)}</span>
+        <button class="mi" data-act="logout">Sign out</button></div>
+    </header>
+    <section class="view" id="view">${u.startingPin && route !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
+    <footer class="taskbar raised">
+      <a class="btn start" href="#/hq">${bird(16)}Cardinal</a>
+      <div class="tasks">${wells.join('')}</div>
+      <span class="well tw clock" id="clock">${clockText()}</span>
+      ${taBtn}
+    </footer>
   </div>`;
 }
 
@@ -425,17 +450,17 @@ function hqView() {
   const todo = mine.filter(needsMe);
   const openDeals = mine.filter((c) => OPEN.includes(c.status) && !needsMe(c));
   return `${phaseBanner()}
-    <div class="card hero">
+    <div class="card"><div class="card-head"><h3>Artist File: ${esc(m.displayName)}</h3><span class="more mono">@${esc(m.username)}</span></div><div class="hero">
       ${avatar(m, 'xl')}
       <div style="min-width:0;flex:1">
-        <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red-2);text-transform:uppercase">Level ${p.level} · ${esc(p.title)}</div>
+        <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red);text-transform:uppercase">Level ${p.level} · ${esc(p.title)}</div>
         <h1>${esc(m.displayName)}</h1>
         <div class="meta">${esc(m.roleTitle || 'Artist')} · @${esc(m.username)}</div>
         <div class="xp"><div class="lbls"><span>${p.levelXp} / ${p.levelSpan} XP</span><span>Level ${p.level + 1}</span></div><div class="bar"><i style="width:${(p.levelXp / p.levelSpan) * 100}%"></i></div></div>
         ${badgesHtml(m.badges)}
       </div>
       <div class="side"><small class="dim" style="letter-spacing:.12em;text-transform:uppercase;font-size:11px">Chart position</small><div class="num" style="font-size:54px;font-weight:700;line-height:1">#${rank || '-'}</div><small class="muted">of ${activeRoster().length} artists</small></div>
-    </div>
+    </div></div>
     <div class="stats">
       ${stat('Cash on hand', money(s.balance), 'Ready to spend', 'gold', 'dollar')}
       ${stat('In escrow', money(s.escrow), 'Locked in your open offers', '', 'lock')}
@@ -498,7 +523,7 @@ function feedList(items) {
     const p = person(f.actorId);
     if (f.kind === 'chat' || f.kind === 'announcement') {
       return `<li class="k-${f.kind}">${f.kind === 'chat' ? avatar(p) : `<span class="ico">${icon('shield')}</span>`}<div class="body">
-        <div><b>${esc(p?.displayName || 'Record Owner')}</b> <time>· ${ago(f.at)}</time>${f.kind === 'announcement' ? ' <span class="tag" style="background:var(--red);color:#fff">Label</span>' : ''}</div>
+        <div><b>${esc(p?.displayName || 'Record Owner')}</b> <time>· ${ago(f.at)}</time>${f.kind === 'announcement' ? ' <span class="tag">Label</span>' : ''}</div>
         <div class="chat-msg">${esc(f.message)}</div></div></li>`;
     }
     return `<li class="k-${f.kind}"><span class="ico">${icon(FEED_ICON[f.kind] || 'zap')}</span><div class="body"><div class="msg">${esc(f.message)}</div><time>${ago(f.at)}</time></div></li>`;
@@ -552,7 +577,7 @@ function serviceCard(s) {
   const btn = mine ? `<button class="btn sm" data-act="edit-service" data-id="${s.id}">${icon('edit')}Edit</button>`
     : me() && live() ? `<button class="btn sm primary" data-act="offer" data-id="${s.id}">Make offer</button>` : '';
   return `<div class="service ${mine ? 'mine' : ''} ${s.active ? '' : 'off'}">
-    <div style="display:flex;align-items:center;gap:8px"><span class="tag">${esc(s.category)}</span>${mine ? '<span class="tag" style="background:var(--red-soft);color:var(--red-2)">Yours</span>' : ''}${s.active ? '' : '<span class="tag">Paused</span>'}</div>
+    <div style="display:flex;align-items:center;gap:8px"><span class="tag">${esc(s.category)}</span>${mine ? '<span class="tag" style="background:var(--red);color:#fff">Yours</span>' : ''}${s.active ? '' : '<span class="tag">Paused</span>'}</div>
     <h4>${esc(s.title)}</h4>
     ${artistLink(s.userId)}
     <div class="desc">${esc(s.description) || '<span class="dim">No description.</span>'}</div>
@@ -617,7 +642,7 @@ function contractDetailView(id) {
         <div class="clause"><b>Scope of work</b>${party ? `<div class="terms">${esc(c.terms) || '<i>No additional terms. Standard service as listed.</i>'}</div>` : '<i>Terms are private to the parties.</i>'}</div>
         <div class="clause"><b>Compensation</b>
           <table class="money-table"><tr><td>Deal value</td><td>${money(c.amount)}</td></tr><tr><td>Label cut (${g.label_cut_pct}%)</td><td>-${money(fee)}</td></tr><tr><td>Paid to the Artist on completion</td><td>${money(c.amount - fee)}</td></tr></table>
-          <small style="font-family:var(--font);color:#6b5f55">Currently held in escrow: ${money(c.escrow)}</small></div>
+          <small class="mono muted">Currently held in escrow: ${money(c.escrow)}</small></div>
         ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'day')} of label approval.</p>` : ''}
         ${c.rating ? `<p class="clause"><b>Client rating</b>${'★'.repeat(c.rating)}${'☆'.repeat(5 - c.rating)}</p>` : ''}
         <div class="sigs"><div class="sig">${signed.buyer}Client</div><div class="sig">${signed.seller}Artist</div><div class="sig">${signed.owner}Record Owner</div></div>
@@ -653,7 +678,7 @@ function artistView(id) {
   const canHire = me() && live() && p.id !== S.user.id && p.active;
   return `<div class="page-head"><div class="kicker"><a href="#/roster" style="text-decoration:none">← Roster</a></div></div>
     <div class="card"><div class="profile-hero">${avatar(p, 'xl')}<div style="flex:1;min-width:0">
-      <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red-2);text-transform:uppercase">Level ${p.progress.level} · ${esc(p.progress.title)}</div>
+      <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red);text-transform:uppercase">Level ${p.progress.level} · ${esc(p.progress.title)}</div>
       <h1>${esc(p.displayName)}</h1><div class="muted">${esc(p.roleTitle || 'Artist')} · @${esc(p.username)}${online(p) ? ' · <span class="green">Online</span>' : ''}</div>
       ${p.bio ? `<div class="bio">${esc(p.bio)}</div>` : ''}${badgesHtml(p.badges)}</div>
       ${canHire ? `<button class="btn primary" data-act="custom-offer" data-seller="${p.id}">${icon('dollar')}Make an offer</button>` : ''}</div></div>
@@ -764,7 +789,7 @@ function guideHtml(inModal) {
     <div class="guide-steps"><div class="gp"><b>Release Guide</b><br/><small>${tracking ? `${doneCount} of ${GUIDE.length} done` : 'Preview'}</small><div class="bar gold"><i style="width:${(doneCount / GUIDE.length) * 100}%"></i></div></div>
       ${GUIDE.map((s, j) => `<button class="${j === i ? 'on' : ''} ${gs.done[s.id] ? 'done' : ''}" data-act="guide-go" data-i="${j}"><span class="n">${gs.done[s.id] ? '✓' : j + 1}</span><span class="lbl-t">${s.title}</span></button>`).join('')}</div>
     <div class="guide-main">
-      ${inModal ? `<div style="display:flex"><span class="kicker">Step ${i + 1} of ${GUIDE.length} · ${step.kicker}</span><button class="btn ghost icon" style="margin-left:auto;margin-top:-8px" data-act="close-modal" aria-label="Close">${icon('x')}</button></div>` : `<span class="kicker">Step ${i + 1} of ${GUIDE.length} · ${step.kicker}</span>`}
+      <span class="kicker">Step ${i + 1} of ${GUIDE.length} · ${step.kicker}</span>
       <h2>${step.title}</h2>
       <div class="gbody">${step.body}</div>
       <ul class="checklist">${step.checklist.map((c) => `<li><span>${c}</span></li>`).join('')}</ul>
@@ -781,11 +806,10 @@ function guideView() {
   return `${pageHead('Season Finale', 'Release Guide', 'Your step-by-step path from finished song to Spotify, Apple Music and every other streaming service.')}${guideHtml(false)}`;
 }
 function openGuideModal() {
-  modal(guideHtml(true), { wide: true });
-  $('#modal-root .modal').dataset.guide = '1';
+  modal(`${modalHead('Release Guide')}<div id="guide-wrap">${guideHtml(true)}</div>`, { wide: true });
 }
 function rerenderGuide() {
-  const inModal = $('#modal-root .modal[data-guide]');
+  const inModal = $('#modal-root #guide-wrap');
   if (inModal) inModal.innerHTML = guideHtml(true);
   else render();
 }
@@ -885,7 +909,7 @@ function consoleView() {
         ${r.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Artist</th><th>Username</th><th>PIN</th><th>Last seen</th><th class="r">Cash</th><th class="r">Actions</th></tr></thead><tbody>
         ${r.map((p) => `<tr class="${p.active ? '' : 'off'}"><td>${nameLine(p.id)}<div class="dim" style="font-size:12px;margin-left:32px">${esc(p.roleTitle)}</div></td>
           <td class="mono">@${esc(p.username)}</td>
-          <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : '<span class="tag" style="color:var(--amber);background:var(--amber-soft)">Unclaimed</span>'}</td>
+          <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : '<span class="tag" style="background:var(--brass)">Unclaimed</span>'}</td>
           <td class="dim nowrap">${p.lastSeen ? ago(p.lastSeen) : 'Never'}</td><td class="r num gold">${money(p.stats.balance)}</td>
           <td class="r nowrap"><button class="btn sm" data-act="edit-player" data-id="${p.id}">Edit</button> ${p.claimed ? `<button class="btn sm" data-act="reset-pin" data-id="${p.id}">Reset PIN</button>` : ''}
             <button class="btn sm ${p.active ? 'danger' : ''}" data-act="toggle-player" data-id="${p.id}">${p.active ? 'Remove' : 'Restore'}</button></td></tr>`).join('')}
@@ -901,7 +925,7 @@ function consoleView() {
           <div class="pick-list" id="grant-picks">${r.map((p) => `<label class="check"><input type="checkbox" name="u" value="${p.id}" /> ${esc(p.displayName)} <span class="dim">· ${money(p.stats.balance)}</span></label>`).join('') || '<span class="muted">No artists yet.</span>'}</div></div>
         <button class="btn gold">${icon('dollar')}Send</button></form>`}</div>
       <div class="card"><div class="card-head"><h3>Recent label transactions</h3><a class="more" href="#/data">Full ledger →</a></div>
-        ${st.ledger.filter((l) => ['grant', 'fine', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span></div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
+        ${st.ledger.filter((l) => ['grant', 'fine', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule)"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span></div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
   } else if (t === 'season') {
     const g = st.game;
     const order = ['setup', 'active', 'showcase', 'archived'];
@@ -1192,7 +1216,6 @@ const ACTIONS = {
   'login-back': () => { S.login = freshLogin(); render(); },
   'pin-key': (el) => pinKey(el.dataset.k),
   logout: async () => { await api('POST', '/api/logout').catch(() => {}); AP.audio.pause(); AP.current = null; S.user = null; S.state = null; S.login = freshLogin(); render(); },
-  'toggle-nav': () => $('#sidebar').classList.toggle('open'),
   'market-cat': (el) => { S.ui.marketCat = el.dataset.cat; render(); },
   'contract-tab': (el) => { S.ui.contractTab = el.dataset.tab; render(); },
   'chart-tab': (el) => { S.ui.chartTab = el.dataset.tab; render(); },
@@ -1338,10 +1361,7 @@ const FORMS = {
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
-  if (!el) {
-    if (!e.target.closest('#sidebar')) $('#sidebar')?.classList.remove('open');
-    return;
-  }
+  if (!el) return;
   if (el.tagName === 'A' && el.getAttribute('href')) return;
   const fn = ACTIONS[el.dataset.act];
   if (fn) { e.preventDefault(); fn(el, e); }
@@ -1387,7 +1407,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('hashchange', () => { $('#sidebar')?.classList.remove('open'); closeModal(); render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { closeModal(); render(); window.scrollTo(0, 0); });
 
 // Keep everyone in sync: re-fetch the label state every 10s, without clobbering
 // an open modal or a form someone is typing in.
@@ -1398,5 +1418,7 @@ setInterval(async () => {
   const typing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.activeElement.dataset.input;
   if (S.stateKey !== before && !modalOpen() && !typing) render();
 }, 10_000);
+
+setInterval(() => { const c = $('#clock'); if (c) c.textContent = clockText(); }, 20_000);
 
 start();
