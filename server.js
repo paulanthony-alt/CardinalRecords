@@ -4,7 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { db, tx, UPLOAD_DIR } = require('./src/db');
-const { loadOwners } = require('./src/owners');
+const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const G = require('./src/game');
 const { fail, str, int } = G;
@@ -142,7 +142,7 @@ app.get('/api/me', auth, (req, res) => {
     ? db.prepare('SELECT * FROM games ORDER BY created_at DESC').all()
     : db.prepare('SELECT * FROM games WHERE id = ?').all(req.user.game_id ?? -1);
   res.json({
-    user: publicUser(req.user, { withPin: false }),
+    user: { ...publicUser(req.user, { withPin: false }), startingPin: usingStartingPin(req.user) },
     games: games.map((g) => { const gg = G.getGame(g.id); return { ...gg, clock: G.clock(gg) }; }),
   });
 });

@@ -383,7 +383,7 @@ function shellView(view) {
     </aside>
     <div class="main">
       <header class="topbar"><button class="btn ghost icon menu-btn" data-act="toggle-nav" aria-label="Menu">${icon('menu')}</button>${top}</header>
-      <section class="view" id="view">${view}</section>
+      <section class="view" id="view">${u.startingPin && currentRoute()[0] !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn primary" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
     </div>
   </div>`;
 }
@@ -1297,7 +1297,7 @@ const FORMS = {
   },
   upload: (d, f) => uploadTrack(f),
   profile: (d) => act(async () => { await api('PUT', '/api/me', d); await loadMe(); }, 'Profile saved'),
-  pin: async (d, f) => { if (await act(() => api('PUT', '/api/me/pin', d), 'PIN updated')) f.reset(); },
+  pin: async (d, f) => { if (await act(async () => { await api('PUT', '/api/me/pin', d); await loadMe(); }, 'PIN updated')) f.reset(); },
   'add-player': async (d, f) => { if (await act(() => api('POST', `/api/games/${S.gameId}/players`, d), `${d.displayName || d.username} signed to the label`)) f.reset(); },
   'edit-player': async (d) => { if (await act(() => api('PATCH', `/api/players/${d.id}`, d), 'Artist updated')) closeModal(); },
   grant: async (d, f) => {

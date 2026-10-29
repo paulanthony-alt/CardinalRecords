@@ -25,6 +25,10 @@ function readOwnerConfig() {
   return [];
 }
 
+// username (lowercase) -> PIN from config, so the app can nag owners who
+// haven't changed their starting PIN yet.
+const startingPins = new Map();
+
 function loadOwners() {
   let owners = readOwnerConfig();
   const existingOwners = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner'").get().n;
@@ -44,6 +48,7 @@ function loadOwners() {
       console.warn(`[owners] Skipping "${o.username}": PIN must be 4-6 digits.`);
       continue;
     }
+    startingPins.set(String(o.username).toLowerCase(), String(o.pin));
     const existing = find.get(o.username);
     if (existing) {
       if (existing.role !== 'owner') console.warn(`[owners] "${o.username}" already exists as a player; skipped.`);
@@ -54,4 +59,6 @@ function loadOwners() {
   }
 }
 
-module.exports = { loadOwners };
+const usingStartingPin = (u) => u.role === 'owner' && startingPins.get(u.username.toLowerCase()) === u.pin;
+
+module.exports = { loadOwners, usingStartingPin };
