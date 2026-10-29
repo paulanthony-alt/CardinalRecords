@@ -7,10 +7,13 @@ A multiplayer record label simulation. Up to 30 artists per season sell services
 ```bash
 npm install
 cp owners.example.json owners.json   # then edit it: your Record Owner accounts
+neon login                           # once, to sign in to Neon
+neon deploy                          # provisions Postgres and writes DATABASE_URL to .env.local
+npm run build                        # syntax-checks every server and browser file
 npm start                            # http://localhost:3000
 ```
 
-Requires **Node.js 22.13+**. It uses Node's built-in SQLite, so the only dependency is Express.
+Requires **Node.js 22.13+**. Data lives in **Lakebase Postgres on Neon**. The project is linked in `.neon` and its services are declared in `neon.ts`. The app talks to the database with node-postgres (`pg`) over a shared connection pool. It creates its tables on startup, so there is no separate migration step. To run against any other Postgres, set `DATABASE_URL` yourself.
 
 ## Roles
 
@@ -46,8 +49,11 @@ Owner exports include PINs. Player exports don't.
 
 | Env var | Default | |
 |---|---|---|
+| `DATABASE_URL` | none (required) | Postgres connection string. Use Neon's **pooled** URL for the app. `neon deploy` / `neon env pull` write it to `.env.local`. On a host, set it in the dashboard. |
+| `DATABASE_URL_UNPOOLED` | falls back to `DATABASE_URL` | Neon's **direct** URL, used only to create and update tables at startup. |
+| `PG_POOL_MAX` | `10` | Maximum database connections the app opens. |
 | `PORT` | `3000` | |
-| `DATA_DIR` | `./data` | SQLite database and uploaded audio. **Back this up and keep it on persistent storage.** |
+| `DATA_DIR` | `./data` | Uploaded audio files. **These are on local disk, not in Neon, so keep this on persistent storage.** |
 | `OWNER_ACCOUNTS` | none | Overrides `owners.json`. JSON array, or `user:pin:Display Name,user2:pin2` |
 | `MAX_UPLOAD_MB` | `60` | |
 
@@ -64,7 +70,7 @@ Owners are created on first boot only. Restarting never resets their PINs. If yo
 
 ```
 server.js         Express app and API routes
-src/db.js         SQLite schema
+src/db.js         Postgres pool, schema and transactions
 src/game.js       Game rules: money, escrow, contract state machine, XP, phases
 src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export
