@@ -2,3 +2,5 @@ node_modules/
 data/
 owners.json
 .env
+.env.local
+.neon
