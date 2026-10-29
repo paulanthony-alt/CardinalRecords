@@ -196,10 +196,15 @@ async function tx(fn) {
   }
 }
 
-/** Create tables on first boot. Safe to run from several instances at once. */
+/**
+ * Create tables on first boot. Safe to run from several instances at once.
+ * Schema changes go over the direct (unpooled) connection when one is configured.
+ */
 async function migrate() {
-  const client = await pool.connect();
+  const direct = process.env.DATABASE_URL_UNPOOLED && new pg.Client({ connectionString: process.env.DATABASE_URL_UNPOOLED });
+  const client = direct || (await pool.connect());
   try {
+    if (direct) await direct.connect();
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock($1)', [WRITE_LOCK]);
     await client.query(SCHEMA);
@@ -208,7 +213,8 @@ async function migrate() {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
-    client.release();
+    if (direct) await direct.end().catch(() => {});
+    else client.release();
   }
 }
 

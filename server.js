@@ -18,6 +18,11 @@ const COLORS = ['#E63946', '#F4A261', '#E9C46A', '#2A9D8F', '#48CAE4', '#7B2CBF'
 
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
+// Health check for the host (Render). It skips the database on purpose so frequent probes
+// don't keep Neon's compute from scaling to zero; the server only starts listening after
+// migrate() has reached Postgres, so a bad DATABASE_URL still fails the deploy.
+app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.use(express.json({ limit: '200kb' }));
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');

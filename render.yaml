@@ -1,0 +1,20 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Values marked `sync: false` are entered in the Render dashboard, never stored here.
+services:
+  - type: web
+    name: cardinal-records
+    runtime: node
+    plan: free
+    region: virginia # closest Render region to the Neon project (AWS us-east-1)
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL # Neon pooled connection string (host contains -pooler)
+        sync: false
+      - key: DATABASE_URL_UNPOOLED # Neon direct connection string, used for schema setup
+        sync: false
+      - key: OWNER_ACCOUNTS # e.g. boss:4821:The Boss,coowner:7350:Co-Owner
+        sync: false

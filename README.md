@@ -47,12 +47,23 @@ Owner exports include PINs. Player exports don't.
 |---|---|---|
 | `PORT` | `3000` | |
 | `DATABASE_URL` | none (required) | Postgres connection string. Use Neon's pooled (`-pooler`) URL; `neon deploy` / `neon env pull` write it for you. |
+| `DATABASE_URL_UNPOOLED` | none | Neon's direct connection string. When set, the schema is created over it on boot. |
 | `PG_POOL_MAX` | `10` | Max connections in the server's pool. |
 | `DATA_DIR` | `./data` | Uploaded audio. **Back this up and keep it on persistent storage.** |
 | `OWNER_ACCOUNTS` | none | Overrides `owners.json`. JSON array, or `user:pin:Display Name,user2:pin2` |
 | `MAX_UPLOAD_MB` | `60` | |
 
 Owners are created on first boot only. Restarting never resets their PINs. If you configure no owners, a default `owner` / `0000` account is created. Change it.
+
+## Deploy on Render
+
+`render.yaml` is a Render Blueprint for a free web service: `npm install`, `npm start`, Node 22, health check at `/healthz`. In Render, choose **New → Blueprint**, pick this repo, and fill in the three secret values when asked:
+
+- `DATABASE_URL`: Neon pooled connection string (the host contains `-pooler`)
+- `DATABASE_URL_UNPOOLED`: Neon direct connection string
+- `OWNER_ACCOUNTS`: Record Owner accounts, e.g. `boss:4821:The Boss,coowner:7350:Co-Owner`
+
+On the free plan the service sleeps after a stretch without traffic and takes a moment to wake up, and **its disk is wiped on every restart or redeploy**. All game data lives in Neon and is safe, but uploaded audio files in `DATA_DIR` are not: tracks stay listed while their audio is gone. Use a paid instance with a persistent disk, or move uploads to object storage, before relying on the Showcase.
 
 ## Security notes
 
