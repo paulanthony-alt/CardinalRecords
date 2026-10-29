@@ -63,7 +63,9 @@ Owners are created on first boot only. Restarting never resets their PINs. If yo
 - `DATABASE_URL_UNPOOLED`: Neon direct connection string
 - `OWNER_ACCOUNTS`: Record Owner accounts, e.g. `boss:4821:The Boss,coowner:7350:Co-Owner`
 
-On the free plan the service sleeps after a stretch without traffic and takes a moment to wake up, and **its disk is wiped on every restart or redeploy**. All game data lives in Neon and is safe, but uploaded audio files in `DATA_DIR` are not: tracks stay listed while their audio is gone. Use a paid instance with a persistent disk, or move uploads to object storage, before relying on the Showcase.
+On the free plan the service spins down after 15 minutes without traffic and takes about a minute to wake up, and **its local files are wiped every time it spins down, restarts or redeploys** (free services can't attach a persistent disk). All game data lives in Neon and is safe, but uploaded audio files in `DATA_DIR` are not: tracks stay listed while their audio is gone. Use a paid instance with a persistent disk, or move uploads to object storage, before relying on the Showcase.
+
+`sync: false` values are only asked for when the Blueprint is first created. To change one later, edit it on the service's **Environment** page.
 
 ## Security notes
 
