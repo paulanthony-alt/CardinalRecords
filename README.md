@@ -32,6 +32,8 @@ Requires **Node.js 22.13+**. It uses Node's built-in SQLite, so the only depende
 
 The game side includes XP and levels (Intern → Legend), badges, the Cardinal Chart leaderboard, a live lobby feed and chat, and online indicators.
 
+**Look:** a 1996 label-office desktop. Every panel is a window with a cardinal-red title bar on a maroon desktop, with a menu bar on top and a taskbar at the bottom (cash, day, level, clock, and a red button for your next move). Fonts are Libre Franklin and Courier Prime.
+
 ## Data export
 
 Anyone on a label can download that season's data at any time from **Data & Export**:
