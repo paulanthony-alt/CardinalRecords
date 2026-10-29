@@ -86,6 +86,9 @@ const nameOf = (id) => (id == null ? 'The Label' : person(id)?.displayName || 'U
 const activeRoster = () => S.state.roster.filter((p) => p.active);
 const online = (p) => p?.lastSeen && Date.now() - p.lastSeen < 5 * 60_000;
 const live = () => game()?.status === 'active';
+const uploadsOpen = () => !!game()?.uploads_open && game().status !== 'archived';
+const uploadToggle = (cls = '') => (isOwner() && game().status !== 'archived'
+  ? `<button class="btn ${cls}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}">${icon(uploadsOpen() ? 'lock' : 'upload')}${uploadsOpen() ? 'Close uploads' : 'Open uploads'}</button>` : '');
 
 // ============================================================ api
 async function api(method, url, body) {
@@ -397,11 +400,15 @@ function phaseBanner() {
   if (!g) return '';
   if (g.status === 'setup') return `<div class="banner amber">${icon('clock')}<div><b>Pre-season</b><p>The Record Owner hasn't started the clock yet. ${m ? 'List your services now so you are ready to make deals on Day 1.' : 'Sign your artists, then start the season from the Label Console.'}</p></div>
     <div class="actions">${m ? '<a class="btn" href="#/market">List a service</a>' : '<a class="btn primary" href="#/console">Open console</a>'}</div></div>`;
+  if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music uploads are open</b><p>${m ? 'A Record Owner opened uploads early. Drop your tracks in the Showcase whenever they are ready.' : 'Artists can upload to the Showcase now.'}</p></div>
+    <div class="actions">${m ? '<button class="btn primary" data-act="upload">Upload music</button>' : uploadToggle()}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'active' && g.clock.daysLeft <= 7) return `<div class="banner red">${icon('flag')}<div><b>Final stretch: ${plural(g.clock.daysLeft, 'day')} left</b><p>Wrap up your deals and finish your music. The Showcase opens when the season ends.</p></div></div>`;
+  if (g.status === 'showcase' && !uploadsOpen()) return `<div class="banner purple">${icon('music')}<div><b>The season has wrapped</b><p>${m ? 'Get your final mix ready. Music uploads open once a Record Owner activates them.' : "Artists can't upload their music until you open uploads."}</p></div>
+    <div class="actions">${uploadToggle('primary')}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'showcase') {
     const tracks = m ? m.stats.tracks : 0;
-    return `<div class="banner purple">${icon('music')}<div><b>The Showcase is open</b><p>${m ? (tracks ? `You've uploaded ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Upload the music you made this season so your labelmates can listen.') : 'Artists are uploading their music now.'}</p></div>
-      <div class="actions">${m && !tracks ? '<button class="btn primary" data-act="upload">Upload music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
+    return `<div class="banner purple">${icon('music')}<div><b>Music uploads are open</b><p>${m ? (tracks ? `You've uploaded ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Upload the music you made this season so your labelmates can listen.') : 'Artists are uploading their music now.'}</p></div>
+      <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Upload music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
   }
   if (g.status === 'archived') return `<div class="banner grey">${icon('lock')}<div><b>This season is archived</b><p>Everything is read-only now. You can still listen to the Showcase and download all the data.</p></div><div class="actions"><a class="btn" href="#/data">Download data</a></div></div>`;
   return '';
@@ -704,22 +711,22 @@ function trackCard(t) {
 function showcaseView() {
   const g = game();
   const m = me();
-  if (['setup', 'active'].includes(g.status)) {
+  if (['setup', 'active'].includes(g.status) && !uploadsOpen()) {
     const left = g.status === 'setup' ? g.duration_days : g.clock.daysLeft;
     return `${pageHead('Season Finale', 'Showcase')}
       <div class="card lock"><div class="big">${icon('lock')}</div>
         <h2>The Showcase opens when the season wraps</h2>
-        <p>At the end of the season, every artist uploads the music they made here, and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
+        <p>At the end of the season, once a Record Owner opens uploads, every artist uploads the music they made here and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
         <div class="countdown"><div><b>${left}</b><small>Days to go</small></div><div><b>${g.status === 'setup' ? 0 : g.clock.day}</b><small>Current day</small></div><div><b>${g.duration_days}</b><small>Season length</small></div></div>
         <p class="dim">Use the season to build your track: hire producers, writers, singers and engineers from the Marketplace.</p>
-        <a class="btn" href="#/guide" style="margin-top:10px">Preview the Release Guide</a></div>`;
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">${uploadToggle()}<a class="btn" href="#/guide">Preview the Release Guide</a></div></div>`;
   }
   const tracks = S.state.tracks;
-  const canUpload = m && g.status === 'showcase';
+  const canUpload = m && uploadsOpen();
   return `${phaseBanner()}
     ${pageHead('Season Finale', 'Showcase', `${plural(tracks.length, 'track')} from ${plural(new Set(tracks.map((t) => t.userId)).size, 'artist')}. Press play, show some love.`,
-      `${tracks.length ? `<button class="btn" data-act="play-all">${icon('play')}Play all</button>` : ''}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Upload music</button>` : ''}`)}
-    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to drop a track.' : 'Artists are working on their uploads.', canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Upload music</button>' : '')}`;
+      `${tracks.length ? `<button class="btn" data-act="play-all">${icon('play')}Play all</button>` : ''}${uploadToggle()}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Upload music</button>` : ''}`)}
+    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to drop a track.' : uploadsOpen() ? 'Artists are working on their uploads.' : "Uploads aren't open yet. A Record Owner will open them.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Upload music</button>' : '')}`;
 }
 
 // ---------- release guide ----------
@@ -899,7 +906,7 @@ function consoleView() {
     const g = st.game;
     const order = ['setup', 'active', 'showcase', 'archived'];
     const at = order.indexOf(g.status);
-    const desc = { setup: 'Sign artists, set the rules', active: 'Clock running, deals open', showcase: 'Upload & listen, Release Guide', archived: 'Read-only, data export' };
+    const desc = { setup: 'Sign artists, set the rules', active: 'Clock running, deals open', showcase: 'Listen, uploads when you open them', archived: 'Read-only, data export' };
     const controls = {
       setup: `<button class="btn primary lg" data-act="phase" data-phase="active">${icon('zap')}Start the season</button><p class="dim" style="margin-top:8px">Starts Day 1 of ${g.duration_days}${g.starting_balance ? ` and pays every artist a ${money(g.starting_balance)} signing advance` : ''}.</p>`,
       active: `<button class="btn primary" data-act="phase" data-phase="showcase">${icon('flag')}End season & open Showcase</button><p class="dim" style="margin-top:8px">The season also ends automatically after Day ${g.duration_days}. Open deals stay open for you to settle.</p>`,
@@ -908,6 +915,9 @@ function consoleView() {
     }[g.status];
     body = `<div class="card"><div class="card-head"><h3>${icon('clock')}Season phase</h3></div>
       <div class="phase-track">${order.map((p, i) => `<div class="${i === at ? 'on' : i < at ? 'past' : ''}"><b>${phaseLabel[p]}</b><small>${desc[p]}</small></div>`).join('')}</div>${controls}</div>
+      <div class="card"><div class="card-head"><h3>${icon('upload')}Music uploads</h3><span class="status ${uploadsOpen() ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${uploadsOpen() ? 'Open' : 'Closed'}</span></div>
+        <p class="muted">${uploadsOpen() ? 'Artists can upload tracks to the Showcase right now.' : "Artists can't upload music until you open uploads. Ending the season does not open them automatically."}</p>
+        ${g.status === 'archived' ? '<p class="dim">Reopen the Showcase to change this.</p>' : uploadToggle(uploadsOpen() ? '' : 'primary')}</div>
       <div class="card"><div class="card-head"><h3>${icon('edit')}Season settings</h3></div>${seasonForm(g, 'settings')}</div>`;
   }
   return `${pageHead('Record Owner', 'Label Console', st ? `Run ${esc(st.game.name)}: approve deals, sign artists, move money and control the season clock.` : 'Create a season to get started.')}
@@ -1257,11 +1267,18 @@ const ACTIONS = {
     confirmModal(`Remove ${esc(p.displayName)}?`, "They are signed out and can't sign in. Their money, deals and history stay in the records, and you can restore them later.", 'Remove', 'danger',
       () => act(() => api('PATCH', `/api/players/${p.id}`, { active: false }), 'Artist removed'));
   },
+  uploads: (el) => {
+    const open = el.dataset.open === '1';
+    confirmModal(open ? 'Open music uploads?' : 'Close music uploads?',
+      open ? 'Every artist on this season can upload tracks to the Showcase, and the lobby is told.' : 'Artists won\'t be able to upload new tracks. Tracks already uploaded stay up.',
+      open ? 'Open uploads' : 'Close uploads', open ? 'primary' : 'danger',
+      () => act(() => api('POST', `/api/games/${S.gameId}/uploads`, { open }), open ? 'Uploads are open' : 'Uploads closed'));
+  },
   phase: (el) => {
     const ph = el.dataset.phase;
     const text = {
       active: game().status === 'setup' ? 'The clock starts now and signing advances are paid out.' : 'Deals reopen for the remaining days.',
-      showcase: game().status === 'archived' ? 'Uploads open again.' : 'No new deals can be made. Artists can upload their music.',
+      showcase: game().status === 'archived' ? 'Artists can listen again. Open uploads separately if you want them.' : "No new deals can be made. Music uploads stay closed until you open them.",
       archived: 'The season becomes read-only. Data stays downloadable.',
     }[ph];
     confirmModal(`Move to ${phaseLabel[ph]}?`, text, 'Confirm', 'primary', () => act(() => api('POST', `/api/games/${S.gameId}/phase`, { phase: ph }), 'Season updated'));

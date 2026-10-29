@@ -142,6 +142,15 @@ CREATE INDEX IF NOT EXISTS idx_feed_game       ON feed(game_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_contract ON contract_events(contract_id);
 `);
 
+// Columns added after the first release. Each runs once on an existing database.
+const migrations = [
+  ['games', 'uploads_open', 'INTEGER NOT NULL DEFAULT 0'], // Record Owners switch music uploads on and off
+];
+for (const [table, column, def] of migrations) {
+  const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+  if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+}
+
 /** Run fn inside a transaction; rolls back on throw. */
 function tx(fn) {
   db.exec('BEGIN IMMEDIATE');

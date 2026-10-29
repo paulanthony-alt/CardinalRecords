@@ -233,12 +233,25 @@ app.post('/api/games/:gameId/phase', auth, ownerOnly, (req, res) => {
       G.post(game.id, 'phase', req.user.id, 'The season is back on. Deals are open again.');
     } else if (phase === 'showcase') {
       db.prepare("UPDATE games SET status = 'showcase', ended_at = COALESCE(ended_at, ?) WHERE id = ?").run(Date.now(), game.id);
-      G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : 'The Record Owner called the season. The Showcase is open: upload your music!');
+      G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : "The Record Owner called the season. Get your music ready: uploads to the Showcase open once a Record Owner activates them.");
     } else if (phase === 'archived') {
-      db.prepare("UPDATE games SET status = 'archived' WHERE id = ?").run(game.id);
+      db.prepare("UPDATE games SET status = 'archived', uploads_open = 0 WHERE id = ?").run(game.id);
       G.post(game.id, 'phase', req.user.id, 'This season has been archived. Thanks for playing Cardinal Records.');
     }
   });
+  res.json({ ok: true });
+});
+
+// Music uploads stay closed until a Record Owner opens them.
+app.post('/api/games/:gameId/uploads', auth, ownerOnly, (req, res) => {
+  const game = gameFor(req);
+  const open = !!req.body.open;
+  if (open && game.status === 'archived') fail('Reopen the Showcase before opening uploads');
+  if (open === !!game.uploads_open) return res.json({ ok: true });
+  db.prepare('UPDATE games SET uploads_open = ? WHERE id = ?').run(open ? 1 : 0, game.id);
+  G.post(game.id, 'phase', req.user.id, open
+    ? 'Music uploads are OPEN! Head to the Showcase and drop the tracks you made this season.'
+    : 'Music uploads are closed for now.');
   res.json({ ok: true });
 });
 
@@ -455,7 +468,7 @@ const AUDIO_EXT = { 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav',
 app.post('/api/games/:gameId/tracks', auth, express.raw({ type: () => true, limit: `${MAX_UPLOAD_MB}mb` }), (req, res) => {
   const game = gameFor(req);
   if (req.user.role !== 'player') fail('Only artists can upload music', 403);
-  if (game.status !== 'showcase') fail('Uploads open when the season wraps and the Showcase begins');
+  if (!game.uploads_open || game.status === 'archived') fail("Music uploads aren't open yet. A Record Owner will open them.");
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   const ext = AUDIO_EXT[mime];
   if (!ext) fail('Upload an audio file: MP3, WAV, M4A, AAC, OGG or FLAC');

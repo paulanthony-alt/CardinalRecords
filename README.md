@@ -27,7 +27,7 @@ Requires **Node.js 22.13+**. It uses Node's built-in SQLite, so the only depende
 3. **Contracts.** Each deal moves through these steps:
    `Buyer offers (cash goes into escrow)` → `Artist signs or counters` → **`Record Owner approves`** → announced in the lobby → `Artist delivers` → `Buyer confirms and rates` → artist is paid, minus the label's cut, which goes into the label vault.
    If an offer is declined, rejected, withdrawn or voided, the buyer gets the escrow back.
-4. **Showcase.** The season ends automatically after its last day, or an owner can end it early. Artists upload tracks (MP3/WAV/M4A/AAC/OGG/FLAC, up to 60 MB, 10 per artist). Everyone can listen and like. After uploading, each artist gets the **Release Guide**: 10 steps from mastering to distributors to royalties, with progress saved.
+4. **Showcase.** The season ends automatically after its last day, or an owner can end it early. **Music uploads stay closed until a Record Owner opens them** (Label Console → Season → Music uploads, or the button on the Showcase page). Owners can open them early during the season, close them again at any time, and archiving a season closes them. While uploads are open, artists upload tracks (MP3/WAV/M4A/AAC/OGG/FLAC, up to 60 MB, 10 per artist). Everyone can listen and like. After uploading, each artist gets the **Release Guide**: 10 steps from mastering to distributors to royalties, with progress saved.
 5. **Archive.** The season becomes read-only.
 
 The game side includes XP and levels (Intern → Legend), badges, the Cardinal Chart leaderboard, a live lobby feed and chat, and online indicators.

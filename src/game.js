@@ -48,7 +48,7 @@ function getGame(id) {
   if (g.status === 'active' && g.started_at && Date.now() >= g.started_at + g.duration_days * DAY) {
     const endedAt = g.started_at + g.duration_days * DAY;
     db.prepare("UPDATE games SET status = 'showcase', ended_at = ? WHERE id = ? AND status = 'active'").run(endedAt, g.id);
-    post(g.id, 'phase', null, 'That is a wrap on the season! The Showcase is open: upload the music you made.');
+    post(g.id, 'phase', null, "That is a wrap on the season! Get your music ready: uploads to the Showcase open once a Record Owner activates them.");
     g.status = 'showcase';
     g.ended_at = endedAt;
   }
