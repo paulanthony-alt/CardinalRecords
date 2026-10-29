@@ -6,11 +6,12 @@ A multiplayer record label simulation. Up to 30 artists per season sell services
 
 ```bash
 npm install
+neon deploy                          # provisions Postgres on Neon, writes DATABASE_URL to .env.local
 cp owners.example.json owners.json   # then edit it: your Record Owner accounts
 npm start                            # http://localhost:3000
 ```
 
-Requires **Node.js 22.13+**. It uses Node's built-in SQLite, so the only dependency is Express.
+Requires **Node.js 22.13+** and a Postgres database (Lakebase Postgres on Neon, configured in `neon.ts`). The server talks to it with `pg` (node-postgres) through a connection pool and creates its tables on first boot. `npm start` loads `.env` and `.env.local` automatically. Any other Postgres works too: just set `DATABASE_URL`.
 
 ## Roles
 
@@ -45,11 +46,26 @@ Owner exports include PINs. Player exports don't.
 | Env var | Default | |
 |---|---|---|
 | `PORT` | `3000` | |
-| `DATA_DIR` | `./data` | SQLite database and uploaded audio. **Back this up and keep it on persistent storage.** |
+| `DATABASE_URL` | none (required) | Postgres connection string. Use Neon's pooled (`-pooler`) URL; `neon deploy` / `neon env pull` write it for you. |
+| `DATABASE_URL_UNPOOLED` | none | Neon's direct connection string. When set, the schema is created over it on boot. |
+| `PG_POOL_MAX` | `10` | Max connections in the server's pool. |
+| `DATA_DIR` | `./data` | Uploaded audio. **Back this up and keep it on persistent storage.** |
 | `OWNER_ACCOUNTS` | none | Overrides `owners.json`. JSON array, or `user:pin:Display Name,user2:pin2` |
 | `MAX_UPLOAD_MB` | `60` | |
 
 Owners are created on first boot only. Restarting never resets their PINs. If you configure no owners, a default `owner` / `0000` account is created. Change it.
+
+## Deploy on Render
+
+`render.yaml` is a Render Blueprint for a free web service: `npm install`, `npm start`, Node 22, health check at `/healthz`. In Render, choose **New → Blueprint**, pick this repo, and fill in the three secret values when asked:
+
+- `DATABASE_URL`: Neon pooled connection string (the host contains `-pooler`)
+- `DATABASE_URL_UNPOOLED`: Neon direct connection string
+- `OWNER_ACCOUNTS`: Record Owner accounts, e.g. `boss:4821:The Boss,coowner:7350:Co-Owner`
+
+On the free plan the service spins down after 15 minutes without traffic and takes about a minute to wake up, and **its local files are wiped every time it spins down, restarts or redeploys** (free services can't attach a persistent disk). All game data lives in Neon and is safe, but uploaded audio files in `DATA_DIR` are not: tracks stay listed while their audio is gone. Use a paid instance with a persistent disk, or move uploads to object storage, before relying on the Showcase.
+
+`sync: false` values are only asked for when the Blueprint is first created. To change one later, edit it on the service's **Environment** page.
 
 ## Security notes
 
@@ -62,7 +78,7 @@ Owners are created on first boot only. Restarting never resets their PINs. If yo
 
 ```
 server.js         Express app and API routes
-src/db.js         SQLite schema
+src/db.js         Postgres pool, schema and transaction helper
 src/game.js       Game rules: money, escrow, contract state machine, XP, phases
 src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export

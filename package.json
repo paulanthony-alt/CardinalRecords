@@ -5,13 +5,17 @@
   "main": "server.js",
   "private": true,
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning server.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch server.js"
+    "build": "node --check server.js && node --check src/db.js && node --check src/game.js && node --check src/owners.js && node --check src/zip.js && node --check public/app.js && node --check public/guide.js",
+    "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server.js",
+    "dev": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --watch server.js"
   },
   "engines": {
     "node": ">=22.13"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "@neon/config": "^1.9.5",
+    "@neon/env": "^1.6.6",
+    "express": "^5.1.0",
+    "pg": "^8.23.1"
   }
 }
