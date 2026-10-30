@@ -21,7 +21,6 @@ function ago(ts) {
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 const dateStr = (ts) => new Date(ts).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const fmtTime = (s) => (isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
 function hash(str) { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
 
 const ICONS = {
@@ -32,6 +31,7 @@ const ICONS = {
   message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   chart: '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>',
   music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   map: '<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><path d="M8 2v16"/><path d="M16 6v16"/>',
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
@@ -86,6 +86,18 @@ const nameOf = (id) => (id == null ? 'The Label' : person(id)?.displayName || 'U
 const activeRoster = () => S.state.roster.filter((p) => p.active);
 const online = (p) => p?.lastSeen && Date.now() - p.lastSeen < 5 * 60_000;
 const live = () => game()?.status === 'active';
+// Music lives on streaming sites; name the platform from the link's host.
+const PLATFORMS = [
+  [/(^|\.)spotify\.com$/, 'Spotify'], [/(^|\.)soundcloud\.com$/, 'SoundCloud'], [/(^|\.)(youtube\.com|youtu\.be)$/, 'YouTube'],
+  [/(^|\.)music\.apple\.com$/, 'Apple Music'], [/(^|\.)bandcamp\.com$/, 'Bandcamp'], [/(^|\.)audiomack\.com$/, 'Audiomack'],
+  [/(^|\.)tidal\.com$/, 'Tidal'], [/(^|\.)deezer\.com$/, 'Deezer'], [/(^|\.)music\.amazon\./, 'Amazon Music'],
+];
+function platformOf(url) {
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+  return PLATFORMS.find(([re]) => re.test(host))?.[1] || host || 'the web';
+}
+const listenAttrs = (t) => `href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" data-listen="${t.id}"`;
 const uploadsOpen = () => !!game()?.uploads_open && game().status !== 'archived';
 const uploadToggle = (cls = '') => (isOwner() && game().status !== 'archived'
   ? `<button class="btn ${cls}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}">${icon(uploadsOpen() ? 'lock' : 'upload')}${uploadsOpen() ? 'Close uploads' : 'Open uploads'}</button>` : '');
@@ -369,7 +381,7 @@ function taskAction() {
   }
   const n = st.contracts.filter(needsMe).length;
   if (n) return [`Your move (${n})`, '#/contracts'];
-  if (uploadsOpen() && !me()?.stats.tracks) return ['Upload music', null, 'upload'];
+  if (uploadsOpen() && !me()?.stats.tracks) return ['Share your music', null, 'upload'];
   if (live()) return ['Make a deal', '#/market'];
   if (['showcase', 'archived'].includes(st.game.status)) return ['Release Guide', '#/guide'];
   return ['List a service', '#/market'];
@@ -425,15 +437,15 @@ function phaseBanner() {
   if (!g) return '';
   if (g.status === 'setup') return `<div class="banner amber">${icon('clock')}<div><b>Pre-season</b><p>The Record Owner hasn't started the clock yet. ${m ? 'List your services now so you are ready to make deals on Day 1.' : 'Sign your artists, then start the season from the Label Console.'}</p></div>
     <div class="actions">${m ? '<a class="btn" href="#/market">List a service</a>' : '<a class="btn primary" href="#/console">Open console</a>'}</div></div>`;
-  if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music uploads are open</b><p>${m ? 'A Record Owner opened uploads early. Drop your tracks in the Showcase whenever they are ready.' : 'Artists can upload to the Showcase now.'}</p></div>
-    <div class="actions">${m ? '<button class="btn primary" data-act="upload">Upload music</button>' : uploadToggle()}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
+  if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music uploads are open</b><p>${m ? 'A Record Owner opened uploads early. Share a link to your tracks in the Showcase whenever they are ready.' : 'Artists can share links to their music in the Showcase now.'}</p></div>
+    <div class="actions">${m ? '<button class="btn primary" data-act="upload">Share your music</button>' : uploadToggle()}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'active' && g.clock.daysLeft <= 7) return `<div class="banner red">${icon('flag')}<div><b>Final stretch: ${plural(g.clock.daysLeft, 'day')} left</b><p>Wrap up your deals and finish your music. The Showcase opens when the season ends.</p></div></div>`;
   if (g.status === 'showcase' && !uploadsOpen()) return `<div class="banner purple">${icon('music')}<div><b>The season has wrapped</b><p>${m ? 'Get your final mix ready. Music uploads open once a Record Owner activates them.' : "Artists can't upload their music until you open uploads."}</p></div>
     <div class="actions">${uploadToggle('primary')}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'showcase') {
     const tracks = m ? m.stats.tracks : 0;
-    return `<div class="banner purple">${icon('music')}<div><b>Music uploads are open</b><p>${m ? (tracks ? `You've uploaded ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Upload the music you made this season so your labelmates can listen.') : 'Artists are uploading their music now.'}</p></div>
-      <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Upload music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
+    return `<div class="banner purple">${icon('music')}<div><b>Music uploads are open</b><p>${m ? (tracks ? `You've shared ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Share a link to the music you made this season so your labelmates can listen.') : 'Artists are sharing their music now.'}</p></div>
+      <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Share your music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
   }
   if (g.status === 'archived') return `<div class="banner grey">${icon('lock')}<div><b>This season is archived</b><p>Everything is read-only now. You can still listen to the Showcase and download all the data.</p></div><div class="actions"><a class="btn" href="#/data">Download data</a></div></div>`;
   return '';
@@ -722,12 +734,13 @@ function chartsView() {
 
 function trackCard(t) {
   const p = person(t.userId);
-  const playing = AP.current === t.id && !AP.audio.paused;
-  return `<div class="track ${playing ? 'playing' : ''}" data-track="${t.id}">
-    <div class="cover" style="${cover(t.id + t.title, p?.color)}"><div class="vinyl"></div>
-      <button class="play" data-act="play" data-id="${t.id}" aria-label="Play ${esc(t.title)}">${icon(playing ? 'pause' : 'play')}</button></div>
+  const where = platformOf(t.url);
+  return `<div class="track" data-track="${t.id}">
+    <a class="cover" style="${cover(t.id + t.title, p?.color)}" ${listenAttrs(t)} aria-label="Listen to ${esc(t.title)} on ${esc(where)}"><div class="vinyl"></div>
+      <span class="play ext">${icon('external')}</span></a>
     <div><h4 title="${esc(t.title)}">${esc(t.title)}</h4><div class="by">${esc(p?.displayName)}${t.genre ? ` · ${esc(t.genre)}` : ''}</div></div>
-    <div class="meta"><span>${icon('play')} ${t.plays}</span>
+    <a class="btn primary sm listen" ${listenAttrs(t)}>${icon('external')}Listen on ${esc(where)}</a>
+    <div class="meta"><span title="Times the link was opened">${icon('play')} ${t.plays}</span>
       <button class="like ${t.liked ? 'on' : ''}" data-act="like" data-id="${t.id}" ${t.userId === S.user.id || isOwner() ? 'disabled' : ''} aria-label="Like">${icon('heart')} ${t.likes}</button>
       ${t.userId === S.user.id || isOwner() ? `<button class="btn ghost icon sm" style="margin-left:auto" data-act="track-info" data-id="${t.id}" aria-label="Details">${icon('edit')}</button>` : `<button class="btn ghost sm" style="margin-left:auto" data-act="track-info" data-id="${t.id}">Credits</button>`}</div>
   </div>`;
@@ -741,7 +754,7 @@ function showcaseView() {
     return `${pageHead('Season Finale', 'Showcase')}
       <div class="card lock"><div class="big">${icon('lock')}</div>
         <h2>The Showcase opens when the season wraps</h2>
-        <p>At the end of the season, once a Record Owner opens uploads, every artist uploads the music they made here and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
+        <p>At the end of the season, once a Record Owner opens uploads, every artist shares a link to the music they made here (Spotify, SoundCloud, YouTube…) and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
         <div class="countdown"><div><b>${left}</b><small>Days to go</small></div><div><b>${g.status === 'setup' ? 0 : g.clock.day}</b><small>Current day</small></div><div><b>${g.duration_days}</b><small>Season length</small></div></div>
         <p class="dim">Use the season to build your track: hire producers, writers, singers and engineers from the Marketplace.</p>
         <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">${uploadToggle()}<a class="btn" href="#/guide">Preview the Release Guide</a></div></div>`;
@@ -749,9 +762,9 @@ function showcaseView() {
   const tracks = S.state.tracks;
   const canUpload = m && uploadsOpen();
   return `${phaseBanner()}
-    ${pageHead('Season Finale', 'Showcase', `${plural(tracks.length, 'track')} from ${plural(new Set(tracks.map((t) => t.userId)).size, 'artist')}. Press play, show some love.`,
-      `${tracks.length ? `<button class="btn" data-act="play-all">${icon('play')}Play all</button>` : ''}${uploadToggle()}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Upload music</button>` : ''}`)}
-    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to drop a track.' : uploadsOpen() ? 'Artists are working on their uploads.' : "Uploads aren't open yet. A Record Owner will open them.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Upload music</button>' : '')}`;
+    ${pageHead('Season Finale', 'Showcase', `${plural(tracks.length, 'track')} from ${plural(new Set(tracks.map((t) => t.userId)).size, 'artist')}. Tap a track to listen, show some love.`,
+      `${uploadToggle()}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Share your music</button>` : ''}`)}
+    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to share a track.' : uploadsOpen() ? 'Artists are getting their links ready.' : "Uploads aren't open yet. A Record Owner will open them.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Share your music</button>' : '')}`;
 }
 
 // ---------- release guide ----------
@@ -847,7 +860,7 @@ function profileView() {
         ${m ? `<div class="card"><div class="card-head"><h3>${icon('award')}Progress</h3></div>
           <p><b>Level ${m.progress.level}: ${esc(m.progress.title)}</b> <span class="muted">· ${m.progress.xp.toLocaleString()} XP total</span></p>
           <div class="bar"><i style="width:${(m.progress.levelXp / m.progress.levelSpan) * 100}%"></i></div>
-          <p class="dim" style="font-size:12.5px;margin-top:10px">Earn XP by delivering contracts (+120), hiring labelmates (+60), listing services (+20), uploading music (+150), getting likes (+10), finishing the Release Guide (+200), and +1 XP for every $50 you earn.</p>
+          <p class="dim" style="font-size:12.5px;margin-top:10px">Earn XP by delivering contracts (+120), hiring labelmates (+60), listing services (+20), sharing music (+150), getting likes (+10), finishing the Release Guide (+200), and +1 XP for every $50 you earn.</p>
           ${badgesHtml(m.badges) || '<p class="muted">No badges yet. Close your first deal to earn one.</p>'}</div>` : ''}
       </div>
     </div>`;
@@ -859,8 +872,7 @@ function dataView() {
   const KIND = { advance: 'Signing advance', grant: 'Label grant', fine: 'Label fine', escrow_hold: 'Escrow hold', escrow_refund: 'Escrow refund', payment: 'Payment', label_fee: 'Label cut' };
   return `${pageHead('You', 'Data & Export', `Download everything from ${esc(g.name)} at any time: players, money, contracts, the lobby feed and the music.`)}
     <div class="export-grid">
-      <div class="export-card">${icon('download')}<b>Full archive (.zip)</b><p>All data as JSON and spreadsheet-ready CSVs, plus every track uploaded to the Showcase.</p><a class="btn primary" href="/api/games/${g.id}/export.zip" download>Download ZIP</a></div>
-      <div class="export-card">${icon('file')}<b>Data only (.zip)</b><p>Same JSON and CSVs without the audio files. Small and quick.</p><a class="btn" href="/api/games/${g.id}/export.zip?audio=0" download>Download ZIP</a></div>
+      <div class="export-card">${icon('download')}<b>Full archive (.zip)</b><p>All data as JSON and spreadsheet-ready CSVs, including every Showcase track and its link.</p><a class="btn primary" href="/api/games/${g.id}/export.zip" download>Download ZIP</a></div>
       <div class="export-card">${icon('chart')}<b>Raw JSON</b><p>One file with the complete season data, for developers or backups.</p><a class="btn" href="/api/games/${g.id}/export.json" download>Download JSON</a></div>
     </div>
     ${isOwner() ? '<p class="dim" style="margin-top:12px;font-size:12.5px">Owner exports include player PINs. Store them securely.</p>' : ''}
@@ -940,7 +952,7 @@ function consoleView() {
     body = `<div class="card"><div class="card-head"><h3>${icon('clock')}Season phase</h3></div>
       <div class="phase-track">${order.map((p, i) => `<div class="${i === at ? 'on' : i < at ? 'past' : ''}"><b>${phaseLabel[p]}</b><small>${desc[p]}</small></div>`).join('')}</div>${controls}</div>
       <div class="card"><div class="card-head"><h3>${icon('upload')}Music uploads</h3><span class="status ${uploadsOpen() ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${uploadsOpen() ? 'Open' : 'Closed'}</span></div>
-        <p class="muted">${uploadsOpen() ? 'Artists can upload tracks to the Showcase right now.' : "Artists can't upload music until you open uploads. Ending the season does not open them automatically."}</p>
+        <p class="muted">${uploadsOpen() ? 'Artists can share links to their tracks in the Showcase right now.' : "Artists can't share music until you open uploads. Ending the season does not open them automatically."}</p>
         ${g.status === 'archived' ? '<p class="dim">Reopen the Showcase to change this.</p>' : uploadToggle(uploadsOpen() ? '' : 'primary')}</div>
       <div class="card"><div class="card-head"><h3>${icon('edit')}Season settings</h3></div>${seasonForm(g, 'settings')}</div>`;
   }
@@ -1027,15 +1039,14 @@ function contractActionModal(c, a) {
 function uploadModal() {
   const done = S.state.contracts.filter((c) => c.status === 'completed' && c.buyerId === S.user.id);
   const credits = done.map((c) => `${nameOf(c.sellerId)}: ${c.title}`).join('\n');
-  modal(`${modalHead('Upload to the Showcase', 'Share what you made this season with the whole label.')}
+  modal(`${modalHead('Share to the Showcase', 'Link the music you made this season so the whole label can listen.')}
     <form data-form="upload">
-      <label class="field"><span>Audio file</span><input type="file" name="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" required /><small>MP3, WAV, M4A, AAC, OGG or FLAC. Up to 60 MB.</small></label>
+      <label class="field"><span>Link to your track</span><input type="url" name="url" maxlength="500" required placeholder="https://open.spotify.com/track/…" inputmode="url" autocomplete="off" /><small>Spotify, SoundCloud, YouTube, Apple Music, Bandcamp or any other public link.</small></label>
       <label class="field"><span>Track title</span><input name="title" maxlength="100" required /></label>
       <label class="field"><span>Genre</span><input name="genre" maxlength="40" placeholder="Hip-hop, R&B, Pop…" /></label>
       <label class="field"><span>Credits</span><textarea name="credits" maxlength="1000" placeholder="Who worked on it?">${esc(credits)}</textarea><small>Pre-filled from the contracts you paid for this season.</small></label>
       <label class="field"><span>About the track</span><textarea name="description" maxlength="1000"></textarea></label>
-      <div class="progress" hidden id="up-progress"><i></i></div>
-      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary" id="up-btn">${icon('upload')}Upload</button></div>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('upload')}Share</button></div>
     </form>`);
 }
 
@@ -1045,8 +1056,8 @@ function trackInfoModal(t) {
   modal(`${modalHead(esc(t.title), `${esc(p?.displayName)}${t.genre ? ` · ${esc(t.genre)}` : ''}`)}
     ${t.description ? `<p style="white-space:pre-line">${esc(t.description)}</p>` : ''}
     <div class="field"><span>Credits</span><p style="white-space:pre-line" class="${t.credits ? '' : 'muted'}">${esc(t.credits) || 'No credits listed.'}</p></div>
-    <p class="dim" style="font-size:12.5px">${t.plays} plays · ${t.likes} likes · uploaded ${ago(t.createdAt)} · ${(t.size / 1048576).toFixed(1)} MB</p>
-    <div class="modal-foot">${mine ? `<button class="btn danger" data-act="delete-track" data-id="${t.id}">${icon('trash')}Delete</button>` : ''}<a class="btn" href="/api/tracks/${t.id}/audio" download>${icon('download')}Download</a><button class="btn primary" data-act="play" data-id="${t.id}">${icon('play')}Play</button></div>`);
+    <p class="dim" style="font-size:12.5px">${plural(t.plays, 'listen')} · ${plural(t.likes, 'like')} · shared ${ago(t.createdAt)}</p>
+    <div class="modal-foot">${mine ? `<button class="btn danger" data-act="delete-track" data-id="${t.id}">${icon('trash')}Delete</button>` : ''}<a class="btn primary" ${listenAttrs(t)}>${icon('external')}Listen on ${esc(platformOf(t.url))}</a></div>`);
 }
 
 function editPlayerModal(p) {
@@ -1064,95 +1075,25 @@ function confirmModal(title, text, btn, kind, onOk) {
   S._confirm = onOk;
 }
 
-// ============================================================ audio player
-const AP = { audio: new Audio(), current: null, queue: [], counted: new Set() };
-AP.audio.preload = 'metadata';
+// ============================================================ music links
+async function shareTrack(d) {
+  const ok = await act(() => api('POST', `/api/games/${S.gameId}/tracks`, d));
+  if (!ok) return;
+  closeModal();
+  toast('Your track is live in the Showcase!', 'gold', 'music');
+  confetti();
+  S.ui.guideStep = null;
+  openGuideModal();
+}
 
-function playTrack(id, queue) {
-  if (AP.current === id) {
-    if (AP.audio.paused) AP.audio.play(); else AP.audio.pause();
-    return;
-  }
-  AP.queue = queue || S.state.tracks.map((t) => t.id);
-  AP.current = id;
-  AP.audio.src = `/api/tracks/${id}/audio`;
-  AP.audio.play().catch(() => {});
-  if (!AP.counted.has(id)) { AP.counted.add(id); api('POST', `/api/tracks/${id}/play`).catch(() => {}); }
-  renderPlayer();
-}
-function skip(dir) {
-  const i = AP.queue.indexOf(AP.current);
-  const next = AP.queue[i + dir];
-  if (next) playTrack(next, AP.queue);
-}
-function renderPlayer() {
-  const bar = $('#playerbar');
-  const t = S.state?.tracks.find((x) => x.id === AP.current);
-  if (!t || !S.user) { bar.hidden = true; document.body.classList.remove('has-player'); return; }
-  const p = person(t.userId);
-  bar.hidden = false;
-  document.body.classList.add('has-player');
-  bar.innerHTML = `<div class="pb-art cover" style="${cover(t.id + t.title, p?.color)}"></div>
-    <div class="pb-info"><b>${esc(t.title)}</b><small>${esc(p?.displayName)}</small></div>
-    <div class="pb-ctrls"><button data-act="pb-prev" aria-label="Previous">${icon('prev')}</button><button class="pp" data-act="pb-toggle" aria-label="Play or pause">${icon(AP.audio.paused ? 'play' : 'pause')}</button><button data-act="pb-next" aria-label="Next">${icon('next')}</button></div>
-    <div class="pb-seek"><span id="pb-cur">${fmtTime(AP.audio.currentTime)}</span><div class="bar" data-act="pb-seek"><i id="pb-fill" style="width:${AP.audio.duration ? (AP.audio.currentTime / AP.audio.duration) * 100 : 0}%"></i></div><span>${fmtTime(AP.audio.duration)}</span></div>
-    <button class="like ${t.liked ? 'on' : ''}" data-act="like" data-id="${t.id}" ${t.userId === S.user.id || isOwner() ? 'disabled' : ''} aria-label="Like">${icon('heart')}</button>
-    <button class="btn ghost icon pb-x" data-act="pb-close" aria-label="Close player">${icon('x')}</button>`;
-}
-function syncPlaying() {
-  $$('[data-track]').forEach((el) => {
-    const on = Number(el.dataset.track) === AP.current && !AP.audio.paused;
-    el.classList.toggle('playing', on);
-    const btn = $('.play', el);
-    if (btn) btn.innerHTML = icon(on ? 'pause' : 'play');
-  });
-  const pp = $('#playerbar .pp');
-  if (pp) pp.innerHTML = icon(AP.audio.paused ? 'play' : 'pause');
-}
-AP.audio.addEventListener('play', syncPlaying);
-AP.audio.addEventListener('pause', syncPlaying);
-AP.audio.addEventListener('loadedmetadata', renderPlayer);
-AP.audio.addEventListener('ended', () => skip(1));
-AP.audio.addEventListener('timeupdate', () => {
-  const f = $('#pb-fill');
-  if (f && AP.audio.duration) f.style.width = (AP.audio.currentTime / AP.audio.duration) * 100 + '%';
-  const c = $('#pb-cur');
-  if (c) c.textContent = fmtTime(AP.audio.currentTime);
+// Count a listen when someone opens a track's link (the link itself opens in a new tab).
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-listen]');
+  if (!a) return;
+  const t = S.state?.tracks.find((x) => x.id === Number(a.dataset.listen));
+  if (!t || t.userId === S.user?.id) return;
+  api('POST', `/api/tracks/${t.id}/play`).then(() => { t.plays += 1; if (!modalOpen()) render(); }).catch(() => {});
 });
-
-function uploadTrack(form) {
-  const fd = new FormData(form);
-  const file = fd.get('file');
-  if (!file || !file.size) return toast('Pick an audio file', 'err');
-  if (file.size > 60 * 1048576) return toast('That file is over 60 MB', 'err');
-  const q = new URLSearchParams({ title: fd.get('title'), genre: fd.get('genre') || '', credits: fd.get('credits') || '', description: fd.get('description') || '' });
-  const xhr = new XMLHttpRequest();
-  const prog = $('#up-progress');
-  const btn = $('#up-btn');
-  prog.hidden = false;
-  btn.disabled = true;
-  xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('i', prog).style.width = (e.loaded / e.total) * 100 + '%'; };
-  xhr.onload = async () => {
-    let data = {};
-    try { data = JSON.parse(xhr.responseText); } catch {}
-    if (xhr.status >= 400) { btn.disabled = false; prog.hidden = true; return toast(data.error || 'Upload failed', 'err'); }
-    closeModal();
-    toast('Your track is live in the Showcase!', 'gold', 'music');
-    confetti();
-    await refresh();
-    S.ui.guideStep = null;
-    openGuideModal();
-  };
-  xhr.onerror = () => { btn.disabled = false; toast('Upload failed. Check your connection.', 'err'); };
-  xhr.open('POST', `/api/games/${S.gameId}/tracks?${q}`);
-  let type = file.type;
-  if (!type || !type.startsWith('audio/')) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    type = { mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac' }[ext] || type;
-  }
-  xhr.setRequestHeader('Content-Type', type || 'application/octet-stream');
-  xhr.send(file);
-}
 
 // ============================================================ routing & render
 function currentRoute() {
@@ -1186,8 +1127,6 @@ function render() {
   const app = $('#app');
   if (!S.user) {
     app.innerHTML = loginView();
-    $('#playerbar').hidden = true;
-    document.body.classList.remove('has-player');
     const u = $('input[name=username]');
     if (u) u.focus();
     return;
@@ -1204,7 +1143,6 @@ function render() {
 async function start() {
   try { await loadMe(); } catch { S.user = null; render(); return; }
   await refresh();
-  renderPlayer();
 }
 
 // ============================================================ events
@@ -1215,7 +1153,7 @@ const ACTIONS = {
   'confirm-ok': async () => { const fn = S._confirm; closeModal(); if (fn) await fn(); },
   'login-back': () => { S.login = freshLogin(); render(); },
   'pin-key': (el) => pinKey(el.dataset.k),
-  logout: async () => { await api('POST', '/api/logout').catch(() => {}); AP.audio.pause(); AP.current = null; S.user = null; S.state = null; S.login = freshLogin(); render(); },
+  logout: async () => { await api('POST', '/api/logout').catch(() => {}); S.user = null; S.state = null; S.login = freshLogin(); render(); },
   'market-cat': (el) => { S.ui.marketCat = el.dataset.cat; render(); },
   'contract-tab': (el) => { S.ui.contractTab = el.dataset.tab; render(); },
   'chart-tab': (el) => { S.ui.chartTab = el.dataset.tab; render(); },
@@ -1226,26 +1164,17 @@ const ACTIONS = {
   'custom-offer': (el) => offerModal({ sellerId: Number(el.dataset.seller) || null }),
   contract: (el) => contractActionModal(S.state.contracts.find((c) => c.id === Number(el.dataset.id)), el.dataset.a),
   upload: uploadModal,
-  play: (el) => { playTrack(Number(el.dataset.id)); },
-  'play-all': () => { const ids = S.state.tracks.map((t) => t.id); if (ids.length) { AP.current = null; playTrack(ids[0], ids); } },
   like: async (el) => {
     try {
       await api('POST', `/api/tracks/${el.dataset.id}/like`);
       await loadState();
       if (!modalOpen()) render();
-      renderPlayer();
     } catch (e) { toast(e.message, 'err'); }
   },
   'track-info': (el) => trackInfoModal(S.state.tracks.find((t) => t.id === Number(el.dataset.id))),
   'delete-track': (el) => confirmModal('Delete this track?', 'It will be removed from the Showcase for everyone.', 'Delete', 'danger', () => {
-    if (AP.current === Number(el.dataset.id)) { AP.audio.pause(); AP.current = null; renderPlayer(); }
     return act(() => api('DELETE', `/api/tracks/${el.dataset.id}`), 'Track deleted');
   }),
-  'pb-toggle': () => { if (AP.audio.paused) AP.audio.play(); else AP.audio.pause(); },
-  'pb-next': () => skip(1),
-  'pb-prev': () => (AP.audio.currentTime > 3 ? (AP.audio.currentTime = 0) : skip(-1)),
-  'pb-close': () => { AP.audio.pause(); AP.current = null; renderPlayer(); syncPlaying(); },
-  'pb-seek': (el, e) => { const r = el.getBoundingClientRect(); if (AP.audio.duration) AP.audio.currentTime = ((e.clientX - r.left) / r.width) * AP.audio.duration; },
   'guide-modal': () => { S.ui.guideStep = null; openGuideModal(); },
   'guide-go': (el) => { S.ui.guideStep = Math.max(0, Number(el.dataset.i)); rerenderGuide(); },
   'guide-next': async () => {
@@ -1335,7 +1264,7 @@ const FORMS = {
     const ok = await act(() => api('POST', `/api/contracts/${d.id}/action`, body), msgs[d.action] || 'Contract updated');
     if (ok) { closeModal(); if (['confirm', 'complete', 'approve'].includes(d.action)) confetti(); }
   },
-  upload: (d, f) => uploadTrack(f),
+  upload: (d) => shareTrack(d),
   profile: (d) => act(async () => { await api('PUT', '/api/me', d); await loadMe(); }, 'Profile saved'),
   pin: async (d, f) => { if (await act(async () => { await api('PUT', '/api/me/pin', d); await loadMe(); }, 'PIN updated')) f.reset(); },
   'add-player': async (d, f) => { if (await act(() => api('POST', `/api/games/${S.gameId}/players`, d), `${d.displayName || d.username} signed to the label`)) f.reset(); },
@@ -1381,8 +1310,7 @@ document.addEventListener('change', async (e) => {
   if (k === 'switch-game') {
     S.gameId = Number(el.value);
     store.set('cr.game', S.gameId);
-    AP.audio.pause(); AP.current = null;
-    await refresh(); renderPlayer();
+    await refresh();
   } else if (k === 'guide-done') {
     await setGuideDone(el.dataset.step, el.checked);
     rerenderGuide();

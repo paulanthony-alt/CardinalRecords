@@ -1,12 +1,6 @@
 'use strict';
-const path = require('node:path');
-const fs = require('node:fs');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const pg = require('pg');
-
-const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set. Run `neon deploy` (or `neon env pull`) to write it to .env.local.');
@@ -135,9 +129,7 @@ CREATE TABLE IF NOT EXISTS tracks (
   genre       TEXT    NOT NULL DEFAULT '',
   description TEXT    NOT NULL DEFAULT '',
   credits     TEXT    NOT NULL DEFAULT '',
-  filename    TEXT    NOT NULL,
-  mime        TEXT    NOT NULL,
-  size        INTEGER NOT NULL,
+  url         TEXT    NOT NULL,                       -- Spotify, SoundCloud, YouTube… (http/https only)
   plays       INTEGER NOT NULL DEFAULT 0,
   created_at  BIGINT  NOT NULL
 );
@@ -147,6 +139,11 @@ CREATE TABLE IF NOT EXISTS track_likes (
   user_id  INTEGER NOT NULL REFERENCES users(id),
   PRIMARY KEY (track_id, user_id)
 );
+
+-- Tracks used to be uploaded audio files; now they're links to a streaming site.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '';
+ALTER TABLE tracks ALTER COLUMN url DROP DEFAULT;
+ALTER TABLE tracks DROP COLUMN IF EXISTS filename, DROP COLUMN IF EXISTS mime, DROP COLUMN IF EXISTS size;
 
 CREATE INDEX IF NOT EXISTS idx_ledger_game     ON ledger(game_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_user     ON ledger(user_id);
@@ -218,4 +215,4 @@ async function migrate() {
   }
 }
 
-module.exports = { db, tx, migrate, pool, DATA_DIR, UPLOAD_DIR };
+module.exports = { db, tx, migrate, pool };

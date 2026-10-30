@@ -30,6 +30,15 @@ function int(v, name, { min = -Infinity, max = Infinity } = {}) {
   if (n < min || n > max) fail(`${name} must be between ${min.toLocaleString()} and ${max.toLocaleString()}`);
   return n;
 }
+/** A public http(s) link, e.g. a Spotify or SoundCloud page. Adds https:// when it's missing. */
+function httpUrl(v, name) {
+  let s = str(v, name, { min: 1, max: 500 });
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = `https://${s}`;
+  let u;
+  try { u = new URL(s); } catch { fail(`${name} must be a link like https://open.spotify.com/…`); }
+  if (!['https:', 'http:'].includes(u.protocol) || !u.hostname.includes('.')) fail(`${name} must be a link like https://open.spotify.com/…`);
+  return u.href;
+}
 const isPin = (p) => /^\d{4,6}$/.test(String(p ?? ''));
 const isUsername = (u) => /^[a-zA-Z0-9_.-]{3,24}$/.test(String(u ?? ''));
 
@@ -310,7 +319,7 @@ async function contractAction(user, contractId, body) {
 
 module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
-  HttpError, fail, str, int, isPin, isUsername,
+  HttpError, fail, str, int, httpUrl, isPin, isUsername,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
   createContract, contractAction, nameOf, fmt$,
 };

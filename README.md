@@ -1,6 +1,6 @@
 # Cardinal Records
 
-A multiplayer record label simulation. Up to 30 artists per season sell services to each other, sign contracts, build up their cash, and finish the season by uploading their music and following a step-by-step guide to releasing it on streaming services.
+A multiplayer record label simulation. Up to 30 artists per season sell services to each other, sign contracts, build up their cash, and finish the season by sharing their music and following a step-by-step guide to releasing it on streaming services.
 
 ## Quick start
 
@@ -28,7 +28,7 @@ Requires **Node.js 22.13+** and a Postgres database (Lakebase Postgres on Neon, 
 3. **Contracts.** Each deal moves through these steps:
    `Buyer offers (cash goes into escrow)` → `Artist signs or counters` → **`Record Owner approves`** → announced in the lobby → `Artist delivers` → `Buyer confirms and rates` → artist is paid, minus the label's cut, which goes into the label vault.
    If an offer is declined, rejected, withdrawn or voided, the buyer gets the escrow back.
-4. **Showcase.** The season ends automatically after its last day, or an owner can end it early. **Music uploads stay closed until a Record Owner opens them** (Label Console → Season → Music uploads, or the button on the Showcase page). Owners can open them early during the season, close them again at any time, and archiving a season closes them. While uploads are open, artists upload tracks (MP3/WAV/M4A/AAC/OGG/FLAC, up to 60 MB, 10 per artist). Everyone can listen and like. After uploading, each artist gets the **Release Guide**: 10 steps from mastering to distributors to royalties, with progress saved.
+4. **Showcase.** The season ends automatically after its last day, or an owner can end it early. **Music uploads stay closed until a Record Owner opens them** (Label Console → Season → Music uploads, or the button on the Showcase page). Owners can open them early during the season, close them again at any time, and archiving a season closes them. While uploads are open, artists share a link to each track on Spotify, SoundCloud, YouTube, Apple Music, Bandcamp or any other public page (up to 10 per artist). Everyone can open the link to listen and can like tracks. The app stores only the link, never audio. After sharing, each artist gets the **Release Guide**: 10 steps from mastering to distributors to royalties, with progress saved.
 5. **Archive.** The season becomes read-only.
 
 The game side includes XP and levels (Intern → Legend), badges, the Cardinal Chart leaderboard, a live lobby feed and chat, and online indicators.
@@ -38,8 +38,8 @@ The game side includes XP and levels (Intern → Legend), badges, the Cardinal C
 ## Data export
 
 Anyone on a label can download that season's data at any time from **Data & Export**:
-- a **ZIP** with `data.json`, CSVs (players, ledger, contracts, contract events, services, feed, tracks) and every uploaded audio file
-- a ZIP without the audio, or raw JSON
+- a **ZIP** with `data.json` and CSVs (players, ledger, contracts, contract events, services, feed, tracks with their links)
+- or raw JSON
 
 Owner exports include PINs. Player exports don't.
 
@@ -51,9 +51,7 @@ Owner exports include PINs. Player exports don't.
 | `DATABASE_URL` | none (required) | Postgres connection string. Use Neon's pooled (`-pooler`) URL; `neon deploy` / `neon env pull` write it for you. |
 | `DATABASE_URL_UNPOOLED` | none | Neon's direct connection string. When set, the schema is created over it on boot. |
 | `PG_POOL_MAX` | `10` | Max connections in the server's pool. |
-| `DATA_DIR` | `./data` | Uploaded audio. **Back this up and keep it on persistent storage.** |
 | `OWNER_ACCOUNTS` | none | Overrides `owners.json`. JSON array, or `user:pin:Display Name,user2:pin2` |
-| `MAX_UPLOAD_MB` | `60` | |
 
 Owners are created on first boot only. Restarting never resets their PINs. If you configure no owners, a default `owner` / `0000` account is created. Change it.
 
@@ -65,7 +63,7 @@ Owners are created on first boot only. Restarting never resets their PINs. If yo
 - `DATABASE_URL_UNPOOLED`: Neon direct connection string
 - `OWNER_ACCOUNTS`: Record Owner accounts, e.g. `boss:4821:The Boss,coowner:7350:Co-Owner`
 
-On the free plan the service spins down after 15 minutes without traffic and takes about a minute to wake up, and **its local files are wiped every time it spins down, restarts or redeploys** (free services can't attach a persistent disk). All game data lives in Neon and is safe, but uploaded audio files in `DATA_DIR` are not: tracks stay listed while their audio is gone. Use a paid instance with a persistent disk, or move uploads to object storage, before relying on the Showcase.
+On the free plan the service spins down after 15 minutes without traffic and takes about a minute to wake up. Its local disk is wiped whenever it spins down, restarts or redeploys, which doesn't matter here: everything, including Showcase tracks (stored as links), lives in Neon.
 
 `sync: false` values are only asked for when the Blueprint is first created. To change one later, edit it on the service's **Environment** page.
 
@@ -85,7 +83,7 @@ src/game.js       Game rules: money, escrow, contract state machine, XP, phases
 src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export
 public/           Single-page client (no build step)
-  app.js          UI, routing, audio player
+  app.js          UI and routing
   guide.js        Release Guide content
   styles.css
 ```
