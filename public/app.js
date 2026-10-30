@@ -334,9 +334,7 @@ async function submitPin() {
       await api('POST', '/api/login', { username: L.info.username, pin: L.pin });
     }
     S.login = freshLogin();
-    await setInterval(() => { const c = $('#clock'); if (c) c.textContent = clockText(); }, 20_000);
-
-start();
+    await start();
   } catch (e) {
     L.pin = ''; L.error = e.message; render(); shakePin();
   }
