@@ -1,9 +1,8 @@
 'use strict';
 const express = require('express');
 const path = require('node:path');
-const fs = require('node:fs');
 const crypto = require('node:crypto');
-const { db, tx, migrate, UPLOAD_DIR } = require('./src/db');
+const { db, tx, migrate } = require('./src/db');
 const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const G = require('./src/game');
@@ -12,7 +11,6 @@ const { fail, str, int } = G;
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const SESSION_DAYS = 30;
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 60;
 const MAX_TRACKS_PER_PLAYER = 10;
 const COLORS = ['#E63946', '#F4A261', '#E9C46A', '#2A9D8F', '#48CAE4', '#7B2CBF', '#F72585', '#80ED99', '#FF7B00', '#4361EE'];
 
@@ -388,7 +386,7 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
     game.id
   )).map((t) => ({
     id: t.id, userId: t.user_id, title: t.title, genre: t.genre, description: t.description, credits: t.credits,
-    mime: t.mime, size: t.size, plays: t.plays, likes: t.likes, liked: myLikes.has(t.id), createdAt: t.created_at,
+    url: t.url, plays: t.plays, likes: t.likes, liked: myLikes.has(t.id), createdAt: t.created_at,
   }));
 
   const ledgerRows = isOwner
@@ -469,29 +467,22 @@ app.post('/api/contracts/:contractId/action', auth, async (req, res) => {
 });
 
 // ---------- tracks / showcase ----------
-const AUDIO_EXT = { 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav',
-  'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/webm': 'webm' };
-
-app.post('/api/games/:gameId/tracks', auth, express.raw({ type: () => true, limit: `${MAX_UPLOAD_MB}mb` }), async (req, res) => {
+// Artists share a link to their music on a streaming site; the app stores the link, not audio.
+app.post('/api/games/:gameId/tracks', auth, async (req, res) => {
   const game = await gameFor(req);
-  if (req.user.role !== 'player') fail('Only artists can upload music', 403);
+  if (req.user.role !== 'player') fail('Only artists can share music', 403);
   if (!game.uploads_open || game.status === 'archived') fail("Music uploads aren't open yet. A Record Owner will open them.");
-  const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-  const ext = AUDIO_EXT[mime];
-  if (!ext) fail('Upload an audio file: MP3, WAV, M4A, AAC, OGG or FLAC');
-  if (!Buffer.isBuffer(req.body) || req.body.length < 1000) fail('That file looks empty');
   const count = (await db.get('SELECT COUNT(*) AS n FROM tracks WHERE user_id = ?', req.user.id)).n;
-  if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can upload up to ${MAX_TRACKS_PER_PLAYER} tracks`);
-  const q = req.query;
-  const title = str(q.title, 'Track title', { min: 1, max: 100 });
-  const genre = str(q.genre, 'Genre', { max: 40 });
-  const description = str(q.description, 'Description', { max: 1000 });
-  const credits = str(q.credits, 'Credits', { max: 1000 });
-  const filename = `${game.id}-${req.user.id}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.body);
+  if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can share up to ${MAX_TRACKS_PER_PLAYER} tracks`);
+  const b = req.body;
+  const url = G.httpUrl(b.url, 'Link');
+  const title = str(b.title, 'Track title', { min: 1, max: 100 });
+  const genre = str(b.genre, 'Genre', { max: 40 });
+  const description = str(b.description, 'Description', { max: 1000 });
+  const credits = str(b.credits, 'Credits', { max: 1000 });
   const { id } = await db.run(
-    'INSERT INTO tracks (game_id, user_id, title, genre, description, credits, filename, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    game.id, req.user.id, title, genre, description, credits, filename, mime, req.body.length, Date.now()
+    'INSERT INTO tracks (game_id, user_id, title, genre, description, credits, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    game.id, req.user.id, title, genre, description, credits, url, Date.now()
   );
   await G.post(game.id, 'track', req.user.id, `${req.user.display_name} dropped a new track: "${title}". Go give it a listen.`);
   res.json({ id });
@@ -504,11 +495,7 @@ async function trackFor(req) {
   return t;
 }
 
-app.get('/api/tracks/:trackId/audio', auth, async (req, res) => {
-  const t = await trackFor(req);
-  res.sendFile(path.join(UPLOAD_DIR, t.filename), { headers: { 'Content-Type': t.mime, 'Cache-Control': 'private, max-age=3600' } });
-});
-
+// Counts a listen each time someone other than the artist opens the track's link.
 app.post('/api/tracks/:trackId/play', auth, async (req, res) => {
   const t = await trackFor(req);
   if (t.user_id !== req.user.id) await db.run('UPDATE tracks SET plays = plays + 1 WHERE id = ?', t.id);
@@ -528,7 +515,6 @@ app.delete('/api/tracks/:trackId', auth, async (req, res) => {
   const t = await trackFor(req);
   if (t.user_id !== req.user.id && req.user.role !== 'owner') fail('Not your track', 403);
   await db.run('DELETE FROM tracks WHERE id = ?', t.id);
-  fs.rm(path.join(UPLOAD_DIR, t.filename), { force: true }, () => {});
   res.json({ ok: true });
 });
 
@@ -579,14 +565,6 @@ app.get('/api/games/:gameId/export.zip', auth, async (req, res) => {
   for (const table of ['players', 'ledger', 'services', 'contracts', 'contract_events', 'feed', 'tracks']) {
     zip.add(`${base}/csv/${table}.csv`, toCsv(data[table]));
   }
-  if (req.query.audio !== '0') {
-    const names = new Map(data.players.map((p) => [p.id, p.display_name]));
-    for (const t of data.tracks) {
-      const file = path.join(UPLOAD_DIR, t.filename);
-      if (!fs.existsSync(file)) continue;
-      zip.add(`${base}/music/${slug(names.get(t.user_id))} - ${slug(t.title)}-${t.id}.${t.filename.split('.').pop()}`, fs.readFileSync(file), { store: true });
-    }
-  }
   zip.finish();
 });
 
@@ -595,7 +573,7 @@ app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] })
 app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.use((err, req, res, next) => {
-  if (err.type === 'entity.too.large') return res.status(413).json({ error: `File too large (max ${MAX_UPLOAD_MB} MB)` });
+  if (err.type === 'entity.too.large') return res.status(413).json({ error: 'That request is too large' });
   if (err.status && err.status < 500) return res.status(err.status).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on the server' });
