@@ -1039,7 +1039,7 @@ function uploadModal() {
   const credits = done.map((c) => `${nameOf(c.sellerId)}: ${c.title}`).join('\n');
   modal(`${modalHead('Share to the Showcase', 'Link the music you made this season so the whole label can listen.')}
     <form data-form="upload">
-      <label class="field"><span>Link to your track</span><input type="url" name="url" maxlength="500" required placeholder="https://open.spotify.com/track/…" inputmode="url" autocomplete="off" /><small>Spotify, SoundCloud, YouTube, Apple Music, Bandcamp or any other public link.</small></label>
+      <label class="field"><span>Link to your track</span><input name="url" maxlength="500" required placeholder="https://open.spotify.com/track/…" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" /><small>Spotify, SoundCloud, YouTube, Apple Music, Bandcamp or any other public link.</small></label>
       <label class="field"><span>Track title</span><input name="title" maxlength="100" required /></label>
       <label class="field"><span>Genre</span><input name="genre" maxlength="40" placeholder="Hip-hop, R&B, Pop…" /></label>
       <label class="field"><span>Credits</span><textarea name="credits" maxlength="1000" placeholder="Who worked on it?">${esc(credits)}</textarea><small>Pre-filled from the contracts you paid for this season.</small></label>
@@ -1146,7 +1146,6 @@ async function start() {
 // ============================================================ events
 const ACTIONS = {
   nav: (el) => { location.hash = el.dataset.to; },
-  'modal-bg': (el, e) => { if (e.target === el) closeModal(); },
   'close-modal': closeModal,
   'confirm-ok': async () => { const fn = S._confirm; closeModal(); if (fn) await fn(); },
   'login-back': () => { S.login = freshLogin(); render(); },
@@ -1290,6 +1289,9 @@ document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   if (el.tagName === 'A' && el.getAttribute('href')) return;
+  // Every modal sits inside the backdrop, so only a click on the backdrop itself counts;
+  // anything else (like a form's submit button) must keep its default behavior.
+  if (el.dataset.act === 'modal-bg') { if (e.target === el) closeModal(); return; }
   const fn = ACTIONS[el.dataset.act];
   if (fn) { e.preventDefault(); fn(el, e); }
 });
