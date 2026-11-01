@@ -145,6 +145,14 @@ ALTER TABLE tracks ADD COLUMN IF NOT EXISTS url TEXT NOT NULL DEFAULT '';
 ALTER TABLE tracks ALTER COLUMN url DROP DEFAULT;
 ALTER TABLE tracks DROP COLUMN IF EXISTS filename, DROP COLUMN IF EXISTS mime, DROP COLUMN IF EXISTS size;
 
+-- Rate sheet: owner changes to the default amounts, per season (JSON).
+ALTER TABLE games ADD COLUMN IF NOT EXISTS rate_sheet TEXT NOT NULL DEFAULT '{}';
+-- Contracts are priced from the rate sheet: a job, hourly/per-item or project pricing.
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
+  ADD COLUMN IF NOT EXISTS pricing TEXT,      -- unit | project
+  ADD COLUMN IF NOT EXISTS quantity INTEGER,  -- hours/class blocks or items, for unit pricing
+  ADD COLUMN IF NOT EXISTS unit_rate BIGINT;  -- the rate in effect when the deal was made
+
 CREATE INDEX IF NOT EXISTS idx_ledger_game     ON ledger(game_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_user     ON ledger(user_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_game  ON contracts(game_id, status);

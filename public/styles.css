@@ -34,6 +34,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* components set display; hidden must still win */
 html, body { margin: 0; }
 body {
   font: 13px/1.35 var(--ui);
@@ -158,6 +159,19 @@ input[type=checkbox], input[type=radio] { accent-color: var(--red); width: 15px;
 .mi.on { font-weight: 700; }
 .mi .count, .tabs .count { min-width: 16px; padding: 0 4px; background: var(--red); color: #fff; font-size: 10.5px; font-weight: 800; text-align: center; line-height: 15px; }
 .mi:hover .count, .mi.on .count { background: #fff; color: var(--red); }
+/* Record Owners' Admin pull-down: a menu window hanging from the menu bar */
+.admin-menu { position: relative; flex: none; }
+.admin-btn { font-weight: 700; }
+.admin-btn svg.i { width: 13px; height: 13px; }
+.admin-btn .caret { font-size: 10px; margin-left: 1px; }
+.admin-btn.open { background: var(--red); color: #fff; }
+.admin-drop { position: fixed; top: 29px; z-index: 45; min-width: 230px; padding: 3px; gap: 0; }
+.admin-drop .tb { margin-bottom: 3px; }
+.admin-drop a { display: flex; align-items: center; gap: 9px; padding: 7px 12px; text-decoration: none; font-weight: 600; white-space: nowrap; }
+.admin-drop a svg.i { width: 14px; height: 14px; }
+.admin-drop a:hover, .admin-drop a:focus-visible { background: var(--red); color: #fff; outline: none; }
+.admin-drop a .count { margin-left: auto; min-width: 16px; padding: 0 4px; background: var(--red); color: #fff; font-size: 10.5px; font-weight: 800; text-align: center; line-height: 15px; }
+.admin-drop a:hover .count { background: #fff; color: var(--red); }
 .menu-right { margin-left: auto; display: flex; align-items: center; gap: 8px; padding-left: 10px; white-space: nowrap; }
 .menu-right .who-name, .menu-right .season-name { color: var(--dk); font-weight: 500; }
 .season-pick { width: auto; max-width: 200px; padding: 2px 6px; font-size: 12px; }
@@ -272,6 +286,11 @@ button.chip.on { box-shadow: var(--pressed); background: var(--press); }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
 .tabs button { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 14px; border: 0; background: var(--chrome); font-weight: 600; box-shadow: var(--raised); }
 .tabs button.on { box-shadow: var(--pressed); background: var(--press); font-weight: 800; }
+.tabs a.tab-link { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 14px; background: var(--chrome); font-weight: 600; box-shadow: var(--raised); text-decoration: none; color: var(--ink); }
+.tabs a.tab-link.on { box-shadow: var(--pressed); background: var(--press); font-weight: 800; }
+.rate-in { width: 84px !important; padding: 4px 6px !important; text-align: right; font-family: var(--mono); }
+.pricing { flex-wrap: wrap; gap: 4px 18px !important; }
+.pricing > * { flex: none !important; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; padding: 6px; background: var(--chrome); border: 1px solid #000; box-shadow: var(--window); }
 .toolbar input[type=search] { max-width: 260px; }
 .view > .tabs, .view > p.muted { padding: 0; }
