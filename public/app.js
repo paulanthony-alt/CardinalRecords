@@ -74,14 +74,14 @@ const S = {
   state: null,
   stateKey: '',
   login: freshLogin(),
-  ui: { marketCat: 'All', marketQ: '', contractTab: 'action', consoleTab: 'review', reveal: new Set(), guideStep: null, chartTab: 'worth' },
+  ui: { contractTab: 'action', reveal: new Set(), guideStep: null, chartTab: 'worth', adminOpen: false },
 };
 function freshLogin() { return { step: 'user', username: '', info: null, pin: '', firstPin: '', error: '' }; }
 
 const isOwner = () => S.user?.role === 'owner';
 const game = () => S.state?.game;
 const me = () => S.state?.roster.find((p) => p.id === S.user.id);
-const person = (id) => S.state?.roster.find((p) => p.id === id) || S.state?.owners.find((o) => o.id === id);
+const person = (id) => S.state?.roster.find((p) => p.id === id) || S.state?.owners.find((o) => o.id === id) || S.state?.former?.find((o) => o.id === id);
 const nameOf = (id) => (id == null ? 'The Label' : person(id)?.displayName || 'Unknown');
 const activeRoster = () => S.state.roster.filter((p) => p.active);
 const online = (p) => p?.lastSeen && Date.now() - p.lastSeen < 5 * 60_000;
@@ -100,7 +100,7 @@ function platformOf(url) {
 const listenAttrs = (t) => `href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" data-listen="${t.id}"`;
 const uploadsOpen = () => !!game()?.uploads_open && game().status !== 'archived';
 const uploadToggle = (cls = '') => (isOwner() && game().status !== 'archived'
-  ? `<button class="btn ${cls}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}">${icon(uploadsOpen() ? 'lock' : 'upload')}${uploadsOpen() ? 'Close uploads' : 'Open uploads'}</button>` : '');
+  ? `<button class="btn ${cls}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}">${icon(uploadsOpen() ? 'lock' : 'music')}${uploadsOpen() ? 'Close music sharing' : 'Open music sharing'}</button>` : '');
 
 // ============================================================ api
 async function api(method, url, body) {
@@ -240,18 +240,28 @@ function actionsFor(c) {
   const seller = u.id === c.sellerId;
   const buyer = u.id === c.buyerId;
   const isLive = live();
-  if (seller && c.status === 'offered' && isLive) out.push(['accept', 'Sign contract', 'primary'], ['counter', 'Counter', ''], ['decline', 'Decline', 'danger']);
+  if (seller && c.status === 'offered' && isLive) out.push(['accept', 'Sign contract', 'primary'], ['decline', 'Decline', 'danger']);
   if (seller && c.status === 'countered') out.push(['decline', 'Retract', 'danger']);
-  if (buyer && c.status === 'countered' && isLive) out.push(['accept_counter', `Accept ${money(c.amount)}`, 'primary']);
   if (buyer && ['offered', 'countered'].includes(c.status)) out.push(['withdraw', 'Withdraw', 'danger']);
   if (seller && c.status === 'active') out.push(['deliver', 'Mark delivered', 'primary']);
   if (buyer && c.status === 'delivered') out.push(['confirm', 'Confirm & pay', 'green'], ['revise', 'Request changes', '']);
   if (isOwner() && c.status === 'review') out.push(['approve', 'Approve', 'green'], ['reject', 'Reject', 'danger']);
   if (isOwner() && ['active', 'delivered'].includes(c.status)) out.push(['complete', 'Force pay out', '']);
+  if (isOwner() && ['active', 'delivered', 'completed'].includes(c.status) && !c.events.some((e) => e.action === 'late_fee')) out.push(['late_fee', 'Late fee', 'danger']);
+  if (isOwner() && ['active', 'delivered'].includes(c.status)) out.push(['undone', 'Work not done', 'danger']);
   if (isOwner() && OPEN.includes(c.status) && c.status !== 'review') out.push(['cancel', 'Void & refund', 'danger']);
   return out;
 }
-const needsMe = (c) => actionsFor(c).some(([a]) => ['accept', 'accept_counter', 'confirm', 'approve', 'deliver'].includes(a));
+const needsMe = (c) => actionsFor(c).some(([a]) => ['accept', 'confirm', 'approve', 'deliver'].includes(a));
+
+/** How a deal was priced from the rate sheet, e.g. "3 hours × $40" or "Project rate". */
+function pricingText(c) {
+  if (!c.jobId) return '';
+  const job = S.state.rates.jobs.find((j) => j.id === c.jobId);
+  if (c.pricing === 'project') return 'Project rate';
+  const unit = job?.unit === 'item' ? 'item' : 'hour';
+  return `${plural(c.quantity, unit)} × ${money(c.unitRate)}`;
+}
 
 function stepper(c, mini = false) {
   const dead = ['declined', 'rejected', 'cancelled'].includes(c.status);
@@ -266,7 +276,7 @@ function contractCard(c) {
   return `<div class="it contract st-${c.status} ${needs ? 'sel' : ''}" data-act="nav" data-to="#/contract/${c.id}">
     <span class="chip s-${c.status}">${STATUS[c.status]}</span>
     <div class="it-main"><div><b>${esc(c.title)}</b> <span class="c-no mono">${cno(c.id)}</span>${needs ? ' <span class="needs-tag">Your move</span>' : ''}</div>
-      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.dueDays ? ` · due in ${plural(c.dueDays, 'day')}` : ''}</div></div>
+      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.jobId ? ` · ${esc(pricingText(c))}` : ''}${c.dueDays ? ` · due in ${plural(c.dueDays, 'day')}` : ''}</div></div>
     <div class="it-amt mono">${money(c.amount)}</div>
     ${acts.length ? `<div class="c-actions">${acts.slice(0, 3).map(([a, l, k]) => `<button class="btn sm ${k}" data-act="contract" data-id="${c.id}" data-a="${a}">${l}</button>`).join('')}</div>` : ''}
   </div>`;
@@ -334,9 +344,7 @@ async function submitPin() {
       await api('POST', '/api/login', { username: L.info.username, pin: L.pin });
     }
     S.login = freshLogin();
-    await setInterval(() => { const c = $('#clock'); if (c) c.textContent = clockText(); }, 20_000);
-
-start();
+    await start();
   } catch (e) {
     L.pin = ''; L.error = e.message; render(); shakePin();
   }
@@ -347,14 +355,12 @@ const shakePin = () => { const d = $('#pin-dots'); if (d) { d.classList.remove('
 function navItems() {
   const st = S.state;
   const contractsNeeding = st ? st.contracts.filter(needsMe).length : 0;
-  const review = st ? st.contracts.filter((c) => c.status === 'review').length : 0;
   const items = [];
-  if (isOwner()) items.push({ group: 'Record Owner' }, { to: 'console', label: 'Console', ic: 'shield', count: review });
   items.push(
     { group: 'The Label' },
     { to: 'hq', label: 'HQ', ic: 'home' },
     { to: 'lobby', label: 'Lobby', ic: 'message' },
-    { to: 'market', label: 'Market', ic: 'bag' },
+    { to: 'rates', label: 'Rate Sheet', ic: 'dollar' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
@@ -374,20 +380,38 @@ const bird = (size = 16, cls = '') => `<svg class="bird ${cls}" width="${size}" 
 /** The taskbar's red button does the most useful next thing for this person. */
 function taskAction() {
   const st = S.state;
-  if (!st) return isOwner() ? ['Create a season', '#/console'] : null;
+  if (!st) return isOwner() ? ['Create a season', '#/admin/new'] : null;
   if (isOwner()) {
     const n = st.contracts.filter((c) => c.status === 'review').length;
-    return [n ? `Review queue (${n})` : 'Label Console', '#/console'];
+    return [n ? `Review queue (${n})` : 'Admin', n ? '#/admin/review' : '#/admin/season'];
   }
   const n = st.contracts.filter(needsMe).length;
   if (n) return [`Your move (${n})`, '#/contracts'];
   if (uploadsOpen() && !me()?.stats.tracks) return ['Share your music', null, 'upload'];
-  if (live()) return ['Make a deal', '#/market'];
+  if (live()) return ['Hire someone', '#/rates'];
   if (['showcase', 'archived'].includes(st.game.status)) return ['Release Guide', '#/guide'];
-  return ['List a service', '#/market'];
+  return ['Rate Sheet', '#/rates'];
 }
 
 const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+const ADMIN_TABS = [
+  ['review', 'Review queue', 'shield'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
+  ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'], ['new', 'New season', 'plus'],
+];
+
+/** The Record Owners' pull-down menu. It sits outside the scrolling menu so it never gets clipped. */
+function adminMenu(route) {
+  if (!isOwner()) return '';
+  const review = S.state ? S.state.contracts.filter((c) => c.status === 'review').length : 0;
+  const open = S.ui.adminOpen;
+  const items = ADMIN_TABS.filter(([k]) => S.state || ['seasons', 'new'].includes(k));
+  return `<div class="admin-menu">
+    <button class="mi admin-btn ${route === 'admin' ? 'on' : ''} ${open ? 'open' : ''}" data-act="admin-menu" aria-haspopup="menu" aria-expanded="${open}">${icon('shield')}Admin${review ? `<span class="count">${review}</span>` : ''}<span class="caret" aria-hidden="true">▾</span></button>
+    ${open ? `<div class="admin-drop win" role="menu"><div class="tb"><span class="t">Record Owner</span></div>
+      ${items.map(([k, l, ic]) => `<a role="menuitem" href="#/admin/${k}" data-act="admin-go">${icon(ic)}${l}${k === 'review' && review ? `<span class="count">${review}</span>` : ''}</a>`).join('')}</div>` : ''}
+  </div>`;
+}
 
 function shellView(view) {
   const g = game();
@@ -413,6 +437,7 @@ function shellView(view) {
   return `<div class="shell">
     <header class="menubar raised">
       <a class="brand" href="#/hq">${bird(18)}Cardinal Records</a>
+      ${adminMenu(route)}
       <nav class="menu" aria-label="Main">${nav}</nav>
       <div class="menu-right">${switcher}
         <span class="who-name">${esc(m?.displayName || u.displayName)}</span>
@@ -435,16 +460,16 @@ function phaseBanner() {
   const g = game();
   const m = me();
   if (!g) return '';
-  if (g.status === 'setup') return `<div class="banner amber">${icon('clock')}<div><b>Pre-season</b><p>The Record Owner hasn't started the clock yet. ${m ? 'List your services now so you are ready to make deals on Day 1.' : 'Sign your artists, then start the season from the Label Console.'}</p></div>
-    <div class="actions">${m ? '<a class="btn" href="#/market">List a service</a>' : '<a class="btn primary" href="#/console">Open console</a>'}</div></div>`;
-  if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music uploads are open</b><p>${m ? 'A Record Owner opened uploads early. Share a link to your tracks in the Showcase whenever they are ready.' : 'Artists can share links to their music in the Showcase now.'}</p></div>
+  if (g.status === 'setup') return `<div class="banner amber">${icon('clock')}<div><b>Pre-season</b><p>The Record Owner hasn't started the clock yet. ${m ? 'Read the rate sheet now so you know what every job pays on Day 1.' : 'Sign your artists, then start the season from Admin → Season settings.'}</p></div>
+    <div class="actions">${m ? '<a class="btn" href="#/rates">Rate sheet</a>' : '<a class="btn primary" href="#/admin/season">Season settings</a>'}</div></div>`;
+  if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music sharing is open</b><p>${m ? 'A Record Owner opened music sharing early. Share a link to your tracks in the Showcase whenever they are ready.' : 'Artists can share links to their music in the Showcase now.'}</p></div>
     <div class="actions">${m ? '<button class="btn primary" data-act="upload">Share your music</button>' : uploadToggle()}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'active' && g.clock.daysLeft <= 7) return `<div class="banner red">${icon('flag')}<div><b>Final stretch: ${plural(g.clock.daysLeft, 'day')} left</b><p>Wrap up your deals and finish your music. The Showcase opens when the season ends.</p></div></div>`;
-  if (g.status === 'showcase' && !uploadsOpen()) return `<div class="banner purple">${icon('music')}<div><b>The season has wrapped</b><p>${m ? 'Get your final mix ready. Music uploads open once a Record Owner activates them.' : "Artists can't upload their music until you open uploads."}</p></div>
+  if (g.status === 'showcase' && !uploadsOpen()) return `<div class="banner purple">${icon('music')}<div><b>The season has wrapped</b><p>${m ? 'Get your final mix ready. Music sharing opens once a Record Owner turns it on.' : "Artists can't share their music until you open music sharing."}</p></div>
     <div class="actions">${uploadToggle('primary')}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'showcase') {
     const tracks = m ? m.stats.tracks : 0;
-    return `<div class="banner purple">${icon('music')}<div><b>Music uploads are open</b><p>${m ? (tracks ? `You've shared ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Share a link to the music you made this season so your labelmates can listen.') : 'Artists are sharing their music now.'}</p></div>
+    return `<div class="banner purple">${icon('music')}<div><b>Music sharing is open</b><p>${m ? (tracks ? `You've shared ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Share a link to the music you made this season so your labelmates can listen.') : 'Artists are sharing their music now.'}</p></div>
       <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Share your music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
   }
   if (g.status === 'archived') return `<div class="banner grey">${icon('lock')}<div><b>This season is archived</b><p>Everything is read-only now. You can still listen to the Showcase and download all the data.</p></div><div class="actions"><a class="btn" href="#/data">Download data</a></div></div>`;
@@ -484,7 +509,7 @@ function hqView() {
       <div class="card">
         <div class="card-head"><h3>${icon('zap')}Your move</h3><a class="more" href="#/contracts">All contracts →</a></div>
         ${todo.length ? `<div class="contracts">${todo.slice(0, 4).map(contractCard).join('')}</div>`
-          : empty('check', 'Nothing waiting on you', live() ? 'Browse the Marketplace to hire a labelmate, or list a service to get hired.' : '', live() ? '<a class="btn primary" href="#/market" style="margin-top:8px">Open Marketplace</a>' : '')}
+          : empty('check', 'Nothing waiting on you', live() ? 'Open the rate sheet to hire a labelmate for a job.' : '', live() ? '<a class="btn primary" href="#/rates" style="margin-top:8px">Open the rate sheet</a>' : '')}
         ${openDeals.length ? `<h3 style="margin:20px 0 12px">In motion</h3><div class="contracts">${openDeals.slice(0, 4).map(contractCard).join('')}</div>` : ''}
       </div>
       <div class="stack">
@@ -496,23 +521,23 @@ function hqView() {
 
 function ownerHqView() {
   const st = S.state;
-  if (!st) return pageHead('Record Owner', 'Welcome to Cardinal Records', 'Create your first label season to start signing artists.', '<a class="btn primary" href="#/console">Create a season</a>');
+  if (!st) return pageHead('Record Owner', 'Welcome to Cardinal Records', 'Create your first label season to start signing artists.', '<a class="btn primary" href="#/admin/new">Create a season</a>');
   const r = activeRoster();
   const cash = r.reduce((a, p) => a + p.stats.balance, 0);
   const escrow = r.reduce((a, p) => a + p.stats.escrow, 0);
   const review = st.contracts.filter((c) => c.status === 'review');
   const done = st.contracts.filter((c) => c.status === 'completed');
   return `${phaseBanner()}
-    ${pageHead('Record Owner', esc(st.game.name), 'Your label at a glance.', '<a class="btn primary" href="#/console">Label Console</a>')}
+    ${pageHead('Record Owner', esc(st.game.name), 'Your label at a glance.', '<a class="btn primary" href="#/admin/review">Admin</a>')}
     <div class="stats" style="margin-top:0">
       ${stat('Artists signed', `${r.length}<span class="dim" style="font-size:15px"> / ${st.game.max_players}</span>`, '', '', 'users')}
       ${stat('Cash in circulation', money(cash), 'Across all artists', 'gold', 'dollar')}
       ${stat('Held in escrow', money(escrow), 'Open offers and deals', '', 'lock')}
-      ${stat('Label vault', money(st.vault), `${st.game.label_cut_pct}% cut on completed deals`, 'red', 'vault')}
+      ${stat('Label vault', money(st.vault), st.game.label_cut_pct ? `${st.game.label_cut_pct}% cut on completed deals` : 'No label cut this season', 'red', 'vault')}
       ${stat('Deals closed', done.length, money(done.reduce((a, c) => a + c.amount, 0)) + ' total', '', 'check')}
     </div>
     <div class="grid-2">
-      <div class="card"><div class="card-head"><h3>${icon('shield')}Awaiting your review</h3><a class="more" href="#/console">Review queue →</a></div>
+      <div class="card"><div class="card-head"><h3>${icon('shield')}Awaiting your review</h3><a class="more" href="#/admin/review">Review queue →</a></div>
         ${review.length ? review.slice(0, 5).map(reviewItem).join('') : empty('check', 'Queue is clear', 'New contracts land here once both artists agree.')}</div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
@@ -562,39 +587,33 @@ function lobbyView() {
     </div>`;
 }
 
-const CATEGORIES = ['Production', 'Beat', 'Vocals', 'Songwriting', 'Mixing', 'Mastering', 'Instrument', 'Artwork', 'Video', 'Marketing', 'Other'];
+// ---------- rate sheet ----------
+const unitLabel = (j) => (j.unit === 'item' ? 'per item' : 'per hour / class');
+const fineAmount = (f) => (f.type === 'percent' ? `${f.min}% to ${f.max}% of account` : f.type === 'min' ? `${money(f.amount)} minimum` : f.type === 'per' ? `${money(f.amount)} per ${f.per}` : money(f.amount));
 
-function marketView() {
-  const st = S.state;
-  const ui = S.ui;
-  const q = ui.marketQ.toLowerCase();
-  const open = ['setup', 'active'].includes(st.game.status);
-  const all = st.services.filter((s) => s.active || s.userId === S.user.id);
-  const list = all.filter((s) => (ui.marketCat === 'All' || s.category === ui.marketCat) &&
-    (!q || `${s.title} ${s.description} ${nameOf(s.userId)}`.toLowerCase().includes(q)));
-  const cats = ['All', ...CATEGORIES.filter((c) => all.some((s) => s.category === c))];
-  const actions = me() && open ? `<button class="btn" data-act="custom-offer">${icon('dollar')}Custom offer</button><button class="btn primary" data-act="new-service">${icon('plus')}List a service</button>` : '';
-  return `${pageHead('The Label', 'Marketplace', 'Hire your labelmates for beats, verses, mixes, artwork and more. Every offer becomes a contract the label reviews before work starts.', actions)}
-    ${!open ? `<div class="banner grey">${icon('lock')}<div><b>The marketplace is closed</b><p>The season has wrapped, so no new deals can be made.</p></div></div>` : ''}
-    <div class="toolbar">
-      <input type="search" placeholder="Search services or artists" value="${esc(ui.marketQ)}" data-input="market-q" />
-      <div class="chips">${cats.map((c) => `<button class="chip ${ui.marketCat === c ? 'on' : ''}" data-act="market-cat" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-    </div>
-    ${list.length ? `<div class="grid-cards">${list.map(serviceCard).join('')}</div>`
-      : empty('bag', all.length ? 'No matches' : 'No services yet', all.length ? 'Try another search or category.' : 'Be the first to list what you can do for the label.')}`;
-}
-
-function serviceCard(s) {
-  const mine = s.userId === S.user.id;
-  const btn = mine ? `<button class="btn sm" data-act="edit-service" data-id="${s.id}">${icon('edit')}Edit</button>`
-    : me() && live() ? `<button class="btn sm primary" data-act="offer" data-id="${s.id}">Make offer</button>` : '';
-  return `<div class="service ${mine ? 'mine' : ''} ${s.active ? '' : 'off'}">
-    <div style="display:flex;align-items:center;gap:8px"><span class="tag">${esc(s.category)}</span>${mine ? '<span class="tag" style="background:var(--red);color:#fff">Yours</span>' : ''}${s.active ? '' : '<span class="tag">Paused</span>'}</div>
-    <h4>${esc(s.title)}</h4>
-    ${artistLink(s.userId)}
-    <div class="desc">${esc(s.description) || '<span class="dim">No description.</span>'}</div>
-    <div class="foot"><div class="price"><small>Asking</small>${money(s.price)}</div><span class="dim" style="font-size:12.5px">${icon('clock')} ${plural(s.turnaroundDays, 'day')}</span>${btn}</div>
-  </div>`;
+function ratesView() {
+  const r = S.state.rates;
+  const canHire = me() && live();
+  const jobs = r.jobs.filter((j) => j.active);
+  const jobRow = (j) => `<tr><td><b>${esc(j.name)}</b></td><td class="r num">${money(j.unitRate)}<div class="dim" style="font-size:11px">${unitLabel(j)}</div></td>
+    <td class="r num">${j.projectRate ? money(j.projectRate) : '—'}</td>${canHire ? `<td class="r"><button class="btn sm primary" data-act="hire" data-job="${esc(j.id)}">Hire</button></td>` : ''}</tr>`;
+  return `${pageHead('The Label', 'Rate Sheet', 'Every job pays the rate on this sheet. Pick a job, pick who does it, and pay by the hour, by the item or the project rate.', canHire ? `<button class="btn primary" data-act="hire">${icon('plus')}Hire someone</button>` : '')}
+    <div class="banner amber">${icon('shield')}<div>${r.rules.map((t) => `<p style="margin:0 0 6px">${esc(t)}</p>`).join('')}</div></div>
+    ${!live() && me() ? `<div class="banner grey">${icon('lock')}<div><b>Hiring is closed</b><p>${game().status === 'setup' ? 'Deals open on Day 1, when the season starts.' : 'The season has wrapped, so no new deals can be made.'}</p></div></div>` : ''}
+    <div class="grid-2" style="margin-top:0">
+      <div class="card"><div class="card-head"><h3>${icon('dollar')}Income: jobs</h3><span class="more">${jobs.length} jobs</span></div>
+        <div class="table-wrap"><table class="t"><thead><tr><th>Job</th><th class="r">Rate</th><th class="r">Project rate</th>${canHire ? '<th></th>' : ''}</tr></thead>
+        <tbody>${jobs.map(jobRow).join('')}</tbody></table></div></div>
+      <div class="stack">
+        <div class="card"><div class="card-head"><h3>${icon('award')}Income from the label</h3></div>
+          <table class="t"><tbody>
+            <tr><td><b>Advance</b><div class="dim" style="font-size:12px">All students receive an advance at the beginning of the game.</div></td><td class="r num">${money(r.advance)}</td></tr>
+            ${r.payouts.map((p) => `<tr><td><b>${esc(p.name)}</b><div class="dim" style="font-size:12px">${esc(p.note)}</div></td><td class="r num nowrap">${p.type === 'min' ? `${money(p.amount)}+` : p.type === 'per' ? `${money(p.amount)} / ${esc(p.per)}` : money(p.amount)}</td></tr>`).join('')}
+          </tbody></table></div>
+        <div class="card"><div class="card-head" style="background:var(--redd)"><h3>${icon('flag')}Expenses, fees & fines</h3></div>
+          <table class="t"><tbody>${r.fines.map((f) => `<tr><td><b>${esc(f.name)}</b><div class="dim" style="font-size:12px">${esc(f.note)}</div></td><td class="r num nowrap">${fineAmount(f)}</td></tr>`).join('')}</tbody></table></div>
+      </div>
+    </div>`;
 }
 
 function contractsView() {
@@ -610,12 +629,12 @@ function contractsView() {
   if (!tabs.find((t) => t[0] === S.ui.contractTab)) S.ui.contractTab = 'action';
   const cur = tabs.find((t) => t[0] === S.ui.contractTab);
   const blurb = {
-    action: isOwner() ? 'Contracts both artists agreed to, waiting for the label to approve.' : 'Offers to sign, counters to answer, and work to deliver or approve.',
+    action: isOwner() ? 'Contracts both artists agreed to, waiting for a teacher to approve before work starts.' : 'Offers to sign, work to deliver, and deliveries to confirm.',
     open: 'Deals in progress. Money stays in escrow until the work is delivered and confirmed.',
     history: 'Paid, declined, rejected and cancelled contracts.',
     board: 'Every approved deal at the label. This is what the whole lobby sees.',
   }[cur[0]];
-  return `${pageHead('The Label', 'Contracts', 'Offer → artist signs → label approves → work → delivery → payment. The buyer’s money sits in escrow the whole time.', me() && live() ? `<a class="btn primary" href="#/market">${icon('plus')}New deal</a>` : '')}
+  return `${pageHead('The Label', 'Contracts', 'Pick a job from the rate sheet → artist signs → a teacher approves → work → delivery → payment. The buyer’s money sits in escrow the whole time.', me() && live() ? `<a class="btn primary" href="#/rates">${icon('plus')}Hire someone</a>` : '')}
     <div class="tabs">${tabs.map(([k, l, arr]) => `<button class="${k === cur[0] ? 'on' : ''}" data-act="contract-tab" data-tab="${k}">${l}<span class="count">${arr.length}</span></button>`).join('')}</div>
     <p class="muted" style="margin-top:-6px">${blurb}</p>
     ${cur[2].length ? `<div class="contracts">${cur[2].map(contractCard).join('')}</div>` : empty('file', 'Nothing here', cur[0] === 'action' ? "You're all caught up." : '')}`;
@@ -640,7 +659,7 @@ function contractDetailView(id) {
     owner: sig(publicDeal || !!approver, approver ? nameOf(approver) : 'Cardinal Records'),
   };
   const stamp = { completed: ['paid', 'Paid in full'], active: ['ok', 'Approved'], delivered: ['ok', 'Approved'], review: ['wait', 'Under review'], rejected: ['no', 'Rejected'], declined: ['no', 'Declined'], cancelled: ['no', 'Void'] }[c.status];
-  const evLabel = { offered: 'made an offer', accept: 'signed the contract', counter: 'countered', accept_counter: 'accepted the counter offer', decline: 'declined', withdraw: 'withdrew the offer', approve: 'approved the deal', reject: 'rejected the deal', deliver: 'marked the work delivered', revise: 'requested changes', confirm: 'confirmed delivery and paid', complete: 'paid out the deal', cancel: 'voided the contract' };
+  const evLabel = { offered: 'made an offer', accept: 'signed the contract', counter: 'countered', accept_counter: 'accepted the counter offer', decline: 'declined', withdraw: 'withdrew the offer', approve: 'approved the deal', reject: 'rejected the deal', deliver: 'marked the work delivered', revise: 'requested changes', confirm: 'confirmed delivery and paid', complete: 'paid out the deal', cancel: 'voided the contract', late_fee: 'charged the artist a late fee', undone: 'marked the work not done, fined the artist and refunded the client' };
   return `
     <div class="page-head"><div><div class="kicker"><a href="#/contracts" style="text-decoration:none">← Contracts</a></div><h1>${esc(c.title)}</h1></div>
       <div class="actions"><span class="status s-${c.status}" style="font-size:12px;padding:6px 12px">${STATUS[c.status]}</span></div></div>
@@ -653,7 +672,7 @@ function contractDetailView(id) {
         <p class="clause"><b>Parties</b><strong>${esc(nameOf(c.buyerId))}</strong> (the "Client") engages <strong>${esc(nameOf(c.sellerId))}</strong> (the "Artist") under the label ${esc(g.name)}.</p>
         <div class="clause"><b>Scope of work</b>${party ? `<div class="terms">${esc(c.terms) || '<i>No additional terms. Standard service as listed.</i>'}</div>` : '<i>Terms are private to the parties.</i>'}</div>
         <div class="clause"><b>Compensation</b>
-          <table class="money-table"><tr><td>Deal value</td><td>${money(c.amount)}</td></tr><tr><td>Label cut (${g.label_cut_pct}%)</td><td>-${money(fee)}</td></tr><tr><td>Paid to the Artist on completion</td><td>${money(c.amount - fee)}</td></tr></table>
+          <table class="money-table">${c.jobId ? `<tr><td>Rate sheet: ${esc(S.state.rates.jobs.find((j) => j.id === c.jobId)?.name || c.jobId)}</td><td>${esc(pricingText(c))}</td></tr>` : ''}<tr><td>Deal value</td><td>${money(c.amount)}</td></tr>${g.label_cut_pct ? `<tr><td>Label cut (${g.label_cut_pct}%)</td><td>-${money(fee)}</td></tr>` : ''}<tr><td>Paid to the Artist on completion</td><td>${money(c.amount - fee)}</td></tr></table>
           <small class="mono muted">Currently held in escrow: ${money(c.escrow)}</small></div>
         ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'day')} of label approval.</p>` : ''}
         ${c.rating ? `<p class="clause"><b>Client rating</b>${'★'.repeat(c.rating)}${'☆'.repeat(5 - c.rating)}</p>` : ''}
@@ -662,7 +681,7 @@ function contractDetailView(id) {
       <div class="stack">
         ${acts.length ? `<div class="card"><div class="card-head"><h3>${icon('zap')}Actions</h3></div><div class="c-actions">${acts.map(([a, l, k]) => `<button class="btn ${k}" data-act="contract" data-id="${c.id}" data-a="${a}">${l}</button>`).join('')}</div></div>` : ''}
         <div class="card"><div class="card-head"><h3>${icon('clock')}History</h3></div>
-          ${c.events.length ? `<ul class="timeline">${c.events.map((e) => `<li>${avatar(person(e.actorId), 'sm')}<div style="flex:1;min-width:0"><b>${esc(nameOf(e.actorId))}</b> ${evLabel[e.action] || esc(e.action)}${e.amount != null && ['offered', 'counter'].includes(e.action) ? ` at <b class="gold">${money(e.amount)}</b>` : ''}
+          ${c.events.length ? `<ul class="timeline">${c.events.map((e) => `<li>${avatar(person(e.actorId), 'sm')}<div style="flex:1;min-width:0"><b>${esc(nameOf(e.actorId))}</b> ${evLabel[e.action] || esc(e.action)}${e.amount != null && ['offered', 'counter'].includes(e.action) ? ` at <b class="gold">${money(e.amount)}</b>` : ''}${e.amount != null && ['late_fee', 'undone'].includes(e.action) ? ` (<b class="red">${money(e.amount)}</b>)` : ''}
             <div><time>${dateStr(e.at)}</time></div>${e.note && e.action !== 'offered' ? `<div class="note">${esc(e.note)}</div>` : ''}</div></li>`).join('')}</ul>`
             : '<p class="muted">The full history is visible to the artists on this contract.</p>'}
         </div>
@@ -677,13 +696,14 @@ function rosterView() {
       <div class="top">${avatar(p, 'lg')}<div style="min-width:0"><b>${esc(p.displayName)}</b><small>${esc(p.roleTitle || 'Artist')}</small></div><span class="lvl-pill">LVL ${p.progress.level}</span></div>
       ${badgesHtml(p.badges.slice(0, 3))}
       <div class="mini-stats"><div><small>Net worth</small><b class="gold">${money(p.stats.netWorth)}</b></div><div><small>Deals</small><b>${p.stats.dealsSold + p.stats.dealsBought}</b></div><div><small>Rating</small><b>${p.stats.rating ? p.stats.rating + '★' : '—'}</b></div></div>
-    </a>`).join('')}</div>` : empty('users', 'No artists yet', isOwner() ? 'Sign artists from the Label Console.' : '')}`;
+    </a>`).join('')}</div>` : empty('users', 'No artists yet', isOwner() ? 'Sign artists from Admin → Roster & PINs.' : '')}`;
 }
 
 function artistView(id) {
   const p = S.state.roster.find((x) => x.id === Number(id));
   if (!p) return empty('user', 'Artist not found');
-  const services = S.state.services.filter((s) => s.userId === p.id && s.active);
+  const jobsDone = [...new Set(S.state.contracts.filter((c) => c.sellerId === p.id && c.status === 'completed' && c.jobId)
+    .map((c) => S.state.rates.jobs.find((j) => j.id === c.jobId)?.name).filter(Boolean))];
   const deals = S.state.contracts.filter((c) => (c.buyerId === p.id || c.sellerId === p.id) && ['active', 'delivered', 'completed'].includes(c.status));
   const tracks = S.state.tracks.filter((t) => t.userId === p.id);
   const rank = ranking().findIndex((x) => x.id === p.id) + 1;
@@ -693,7 +713,7 @@ function artistView(id) {
       <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red);text-transform:uppercase">Level ${p.progress.level} · ${esc(p.progress.title)}</div>
       <h1>${esc(p.displayName)}</h1><div class="muted">${esc(p.roleTitle || 'Artist')} · @${esc(p.username)}${online(p) ? ' · <span class="green">Online</span>' : ''}</div>
       ${p.bio ? `<div class="bio">${esc(p.bio)}</div>` : ''}${badgesHtml(p.badges)}</div>
-      ${canHire ? `<button class="btn primary" data-act="custom-offer" data-seller="${p.id}">${icon('dollar')}Make an offer</button>` : ''}</div></div>
+      ${canHire ? `<button class="btn primary" data-act="hire" data-seller="${p.id}">${icon('dollar')}Hire ${esc(p.displayName)}</button>` : ''}</div></div>
     <div class="stats">
       ${stat('Chart', rank ? `#${rank}` : '—', '', 'red', 'chart')}
       ${stat('Net worth', money(p.stats.netWorth), '', 'gold', 'dollar')}
@@ -702,7 +722,7 @@ function artistView(id) {
       ${stat('Rating', p.stats.rating ? `${p.stats.rating} ★` : '—', '', '', 'star')}
     </div>
     <div class="grid-2">
-      <div class="card"><div class="card-head"><h3>${icon('bag')}Services</h3></div>${services.length ? `<div class="grid-cards">${services.map(serviceCard).join('')}</div>` : '<p class="muted">No services listed.</p>'}</div>
+      <div class="card"><div class="card-head"><h3>${icon('award')}Jobs delivered</h3></div>${jobsDone.length ? `<div class="chips">${jobsDone.map((n) => `<span class="chip">${esc(n)}</span>`).join('')}</div>` : '<p class="muted">No completed jobs yet.</p>'}</div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('file')}Deal history</h3></div>${deals.length ? `<table class="t">${deals.map((c) => `<tr class="clickable" data-act="nav" data-to="#/contract/${c.id}"><td><b>${esc(c.title)}</b><div class="dim" style="font-size:12.5px">${c.sellerId === p.id ? `for ${esc(nameOf(c.buyerId))}` : `hired ${esc(nameOf(c.sellerId))}`}</div></td><td><span class="status s-${c.status}">${STATUS[c.status]}</span></td><td class="r num gold">${money(c.amount)}</td></tr>`).join('')}</table>` : '<p class="muted">No public deals yet.</p>'}</div>
         ${tracks.length ? `<div class="card"><div class="card-head"><h3>${icon('music')}Music</h3></div><div class="tracks" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">${tracks.map(trackCard).join('')}</div></div>` : ''}
@@ -754,7 +774,7 @@ function showcaseView() {
     return `${pageHead('Season Finale', 'Showcase')}
       <div class="card lock"><div class="big">${icon('lock')}</div>
         <h2>The Showcase opens when the season wraps</h2>
-        <p>At the end of the season, once a Record Owner opens uploads, every artist shares a link to the music they made here (Spotify, SoundCloud, YouTube…) and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
+        <p>At the end of the season, once a Record Owner opens music sharing, every artist shares a link to the music they made here (Spotify, SoundCloud, YouTube…) and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
         <div class="countdown"><div><b>${left}</b><small>Days to go</small></div><div><b>${g.status === 'setup' ? 0 : g.clock.day}</b><small>Current day</small></div><div><b>${g.duration_days}</b><small>Season length</small></div></div>
         <p class="dim">Use the season to build your track: hire producers, writers, singers and engineers from the Marketplace.</p>
         <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">${uploadToggle()}<a class="btn" href="#/guide">Preview the Release Guide</a></div></div>`;
@@ -764,7 +784,7 @@ function showcaseView() {
   return `${phaseBanner()}
     ${pageHead('Season Finale', 'Showcase', `${plural(tracks.length, 'track')} from ${plural(new Set(tracks.map((t) => t.userId)).size, 'artist')}. Tap a track to listen, show some love.`,
       `${uploadToggle()}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Share your music</button>` : ''}`)}
-    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to share a track.' : uploadsOpen() ? 'Artists are getting their links ready.' : "Uploads aren't open yet. A Record Owner will open them.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Share your music</button>' : '')}`;
+    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to share a track.' : uploadsOpen() ? 'Artists are getting their links ready.' : "Music sharing isn't open yet. A Record Owner will open it.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Share your music</button>' : '')}`;
 }
 
 // ---------- release guide ----------
@@ -860,7 +880,7 @@ function profileView() {
         ${m ? `<div class="card"><div class="card-head"><h3>${icon('award')}Progress</h3></div>
           <p><b>Level ${m.progress.level}: ${esc(m.progress.title)}</b> <span class="muted">· ${m.progress.xp.toLocaleString()} XP total</span></p>
           <div class="bar"><i style="width:${(m.progress.levelXp / m.progress.levelSpan) * 100}%"></i></div>
-          <p class="dim" style="font-size:12.5px;margin-top:10px">Earn XP by delivering contracts (+120), hiring labelmates (+60), listing services (+20), sharing music (+150), getting likes (+10), finishing the Release Guide (+200), and +1 XP for every $50 you earn.</p>
+          <p class="dim" style="font-size:12.5px;margin-top:10px">Earn XP by delivering contracts (+120), hiring labelmates (+60), sharing music (+150), getting likes (+10), finishing the Release Guide (+200), and +1 XP for every $50 you earn. The rate sheet's Game Bonus pays $40 for every two different people you hire.</p>
           ${badgesHtml(m.badges) || '<p class="muted">No badges yet. Close your first deal to earn one.</p>'}</div>` : ''}
       </div>
     </div>`;
@@ -869,7 +889,7 @@ function profileView() {
 function dataView() {
   const g = game();
   const ledger = S.state.ledger;
-  const KIND = { advance: 'Signing advance', grant: 'Label grant', fine: 'Label fine', escrow_hold: 'Escrow hold', escrow_refund: 'Escrow refund', payment: 'Payment', label_fee: 'Label cut' };
+  const KIND = { advance: 'Signing advance', grant: 'Label payment', bonus: 'Game bonus', fine: 'Fee / fine', escrow_hold: 'Escrow hold', escrow_refund: 'Escrow refund', payment: 'Payment', label_fee: 'Label cut' };
   return `${pageHead('You', 'Data & Export', `Download everything from ${esc(g.name)} at any time: players, money, contracts, the lobby feed and the music.`)}
     <div class="export-grid">
       <div class="export-card">${icon('download')}<b>Full archive (.zip)</b><p>All data as JSON and spreadsheet-ready CSVs, including every Showcase track and its link.</p><a class="btn primary" href="/api/games/${g.id}/export.zip" download>Download ZIP</a></div>
@@ -885,79 +905,147 @@ function dataView() {
 // ---------- owner console ----------
 function reviewItem(c) {
   const fee = Math.round((c.amount * game().label_cut_pct) / 100);
+  const detail = [pricingText(c), fee ? `label cut ${money(fee)}` : ''].filter(Boolean).join(' · ');
   return `<div class="review-item"><div style="min-width:0">
     <div style="display:flex;gap:8px;align-items:center"><span class="c-no">${cno(c.id)}</span><a href="#/contract/${c.id}"><b>${esc(c.title)}</b></a></div>
-    <div class="parties" style="margin-top:6px">${nameLine(c.buyerId)}<span>hires</span>${nameLine(c.sellerId)}<span class="gold num" style="font-weight:700;font-size:15px">${money(c.amount)}</span><span class="dim">(label cut ${money(fee)})</span></div>
+    <div class="parties" style="margin-top:6px">${nameLine(c.buyerId)}<span>hires</span>${nameLine(c.sellerId)}<span class="gold num" style="font-weight:700;font-size:15px">${money(c.amount)}</span>${detail ? `<span class="dim">(${esc(detail)})</span>` : ''}</div>
     ${c.terms ? `<div class="terms">${esc(c.terms)}</div>` : ''}</div>
     <div class="c-actions"><button class="btn green" data-act="contract" data-id="${c.id}" data-a="approve">${icon('check')}Approve</button><button class="btn danger" data-act="contract" data-id="${c.id}" data-a="reject">Reject</button></div></div>`;
 }
 
-function consoleView() {
+/** Checkboxes for picking artists, with an "every active artist" switch. */
+function pickArtists(id) {
+  const r = activeRoster();
+  return `<div class="field"><span>Artists</span><label class="check"><input type="checkbox" name="all" value="1" data-change="pick-all" data-target="${id}" /> Every active artist (${r.length})</label>
+    <div class="pick-list" id="${id}">${r.map((p) => `<label class="check"><input type="checkbox" name="u" value="${p.id}" /> ${esc(p.displayName)} <span class="dim">· ${money(p.stats.balance)}</span></label>`).join('') || '<span class="muted">No artists yet.</span>'}</div></div>`;
+}
+
+/** A rate-sheet item picker whose extra fields (how many, amount, percent) follow the chosen item. */
+function itemForm(form, label, items, button) {
+  const first = items[0];
+  const opt = (i) => `<option value="${esc(i.id)}" data-type="${i.type}" data-per="${esc(i.per || '')}" data-amount="${i.amount}" data-min="${i.min ?? ''}" data-max="${i.max ?? ''}">${esc(i.name)} · ${fineAmount(i)}</option>`;
+  const show = (t) => (first?.type === t ? '' : 'hidden');
+  return `<form data-form="${form}">
+    <label class="field"><span>${label}</span><select name="itemId" data-change="item-pick">${items.map(opt).join('')}</select></label>
+    <div class="row">
+      <label class="field" data-show="per" ${show('per')}><span>How many <span data-per-label>${esc(first?.per || '')}</span>s</span><input name="quantity" type="number" min="1" max="100" step="1" value="1" /></label>
+      <label class="field" data-show="min" ${show('min')}><span>Amount ($)</span><input name="amount" type="number" step="1" min="${first?.type === 'min' ? first.amount : 0}" value="${first?.type === 'min' ? first.amount : ''}" /><small>At least the sheet's minimum.</small></label>
+      <label class="field" data-show="percent" ${show('percent')}><span>Percent of account</span><input name="percent" type="number" step="1" min="50" max="100" value="50" /><small>Of the cash each artist has now.</small></label>
+      <label class="field"><span>Note (optional)</span><input name="memo" maxlength="140" placeholder="What it's for" /></label>
+    </div>
+    ${pickArtists(`${form}-picks`)}
+    <button class="btn primary">${button}</button></form>`;
+}
+
+function adminView(tab) {
   const st = S.state;
-  const tabs = [['review', 'Review queue'], ['roster', 'Roster & PINs'], ['treasury', 'Treasury'], ['season', 'Season'], ['new', 'New season']];
-  if (!st) S.ui.consoleTab = 'new';
-  const t = S.ui.consoleTab;
+  const t = st ? (ADMIN_TABS.some(([k]) => k === tab) ? tab : 'review') : (tab === 'seasons' ? 'seasons' : 'new');
+  const archived = st?.game.status === 'archived';
   let body = '';
   if (t === 'new') body = newSeasonForm();
-  else if (t === 'review') {
+  else if (t === 'seasons') {
+    body = `<div class="card"><div class="card-head"><h3>${icon('flag')}All seasons</h3><span class="more">${plural(S.games.length, 'season')}</span></div>
+      <p class="muted" style="margin-top:-4px">Every Record Owner can run and change every season, whoever created it.</p>
+      ${S.games.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Season</th><th>Phase</th><th>Day</th><th class="r">Artists</th><th>Created by</th><th></th></tr></thead><tbody>
+      ${S.games.map((x) => `<tr class="${x.id === S.gameId ? 'me' : ''}"><td><b>${esc(x.name)}</b><div class="dim" style="font-size:12px">${new Date(x.created_at).toLocaleDateString()}</div></td>
+        <td><span class="status s-${{ setup: 'offered', active: 'active', showcase: 'review', archived: 'cancelled' }[x.status]}">${phaseLabel[x.status]}</span></td>
+        <td class="nowrap">${x.status === 'setup' ? 'Not started' : `Day ${x.clock.day} of ${x.clock.totalDays}`}</td><td class="r">${x.players ?? 0} / ${x.max_players}</td>
+        <td>${esc(x.createdByName || '—')}</td>
+        <td class="r nowrap">${x.id === S.gameId ? '<span class="tag">Open now</span>' : `<button class="btn sm" data-act="open-season" data-id="${x.id}">Open</button>`} <button class="btn sm" data-act="open-season" data-id="${x.id}" data-tab="season">Settings</button></td></tr>`).join('')}
+      </tbody></table></div>` : empty('flag', 'No seasons yet')}
+      <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
+  } else if (t === 'review') {
     const review = st.contracts.filter((c) => c.status === 'review');
     const openDeals = st.contracts.filter((c) => ['offered', 'countered', 'active', 'delivered'].includes(c.status));
     body = `<div class="card"><div class="card-head"><h3>${icon('shield')}Awaiting approval</h3><span class="more">${review.length} pending</span></div>
-      <p class="muted" style="margin-top:-6px">Both artists have agreed. Approving starts the work and announces the deal to the lobby. Rejecting refunds the buyer's escrow.</p>
+      <p class="muted" style="margin-top:-6px">Both artists have agreed. Every service must be approved by a teacher before the work is done. Approving starts the work and announces the deal to the lobby. Rejecting refunds the buyer's escrow.</p>
       ${review.length ? review.map(reviewItem).join('') : empty('check', 'Queue is clear')}</div>
-      <div class="card"><div class="card-head"><h3>${icon('file')}All open contracts</h3></div>${openDeals.length ? `<div class="contracts">${openDeals.map(contractCard).join('')}</div>` : '<p class="muted">No open contracts.</p>'}</div>`;
+      <div class="card"><div class="card-head"><h3>${icon('file')}All open contracts</h3></div>
+        <p class="muted" style="margin-top:-4px">Open a contract to charge the late fee, mark the work not done, pay it out or void it.</p>
+        ${openDeals.length ? `<div class="contracts">${openDeals.map(contractCard).join('')}</div>` : '<p class="muted">No open contracts.</p>'}</div>`;
   } else if (t === 'roster') {
     const r = st.roster;
     const full = activeRoster().length >= st.game.max_players;
     body = `<div class="card"><div class="card-head"><h3>${icon('plus')}Sign an artist</h3><span class="more">${activeRoster().length} / ${st.game.max_players} spots used</span></div>
-      ${st.game.status === 'archived' ? '<p class="muted">This season is archived.</p>' : `<form data-form="add-player"><div class="row">
+      ${archived ? '<p class="muted">This season is archived.</p>' : `<form data-form="add-player"><div class="row">
         <label class="field"><span>Username</span><input name="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_.\\-]{3,24}" autocapitalize="off" placeholder="lil.cardinal" ${full ? 'disabled' : ''} /><small>They sign in with this. Letters, numbers, . _ -</small></label>
         <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" placeholder="Lil Cardinal" ${full ? 'disabled' : ''} /></label>
         <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" placeholder="Producer" ${full ? 'disabled' : ''} /></label>
       </div><button class="btn primary" ${full ? 'disabled' : ''}>${full ? 'Roster full' : 'Sign artist'}</button>
-      <span class="dim" style="font-size:12.5px;margin-left:10px">They'll create their own PIN the first time they sign in.${st.game.status === 'active' && st.game.starting_balance ? ` They'll get the ${money(st.game.starting_balance)} signing advance right away.` : ''}</span></form>`}</div>
+      <span class="dim" style="font-size:12.5px;margin-left:10px">They'll create their own PIN the first time they sign in.${st.game.status === 'active' && st.game.starting_balance ? ` They'll get the ${money(st.game.starting_balance)} advance right away.` : ''}</span></form>`}</div>
       <div class="card"><div class="card-head"><h3>${icon('users')}Roster & PINs</h3>
         <button class="btn ghost sm more" data-act="reveal-all">${icon(S.ui.reveal.size ? 'eyeOff' : 'eye')}${S.ui.reveal.size ? 'Hide' : 'Show'} all PINs</button></div>
         ${r.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Artist</th><th>Username</th><th>PIN</th><th>Last seen</th><th class="r">Cash</th><th class="r">Actions</th></tr></thead><tbody>
         ${r.map((p) => `<tr class="${p.active ? '' : 'off'}"><td>${nameLine(p.id)}<div class="dim" style="font-size:12px;margin-left:32px">${esc(p.roleTitle)}</div></td>
           <td class="mono">@${esc(p.username)}</td>
           <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : '<span class="tag" style="background:var(--brass)">Unclaimed</span>'}</td>
-          <td class="dim nowrap">${p.lastSeen ? ago(p.lastSeen) : 'Never'}</td><td class="r num gold">${money(p.stats.balance)}</td>
+          <td class="dim nowrap">${p.lastSeen ? ago(p.lastSeen) : 'Never'}</td><td class="r num ${p.stats.balance < 0 ? 'red' : 'gold'}">${money(p.stats.balance)}</td>
           <td class="r nowrap"><button class="btn sm" data-act="edit-player" data-id="${p.id}">Edit</button> ${p.claimed ? `<button class="btn sm" data-act="reset-pin" data-id="${p.id}">Reset PIN</button>` : ''}
             <button class="btn sm ${p.active ? 'danger' : ''}" data-act="toggle-player" data-id="${p.id}">${p.active ? 'Remove' : 'Restore'}</button></td></tr>`).join('')}
         </tbody></table></div>` : empty('users', 'No artists yet', 'Sign your first artist above.')}</div>`;
   } else if (t === 'treasury') {
     const r = activeRoster();
-    body = `<div class="stats" style="margin-top:0">${stat('Label vault', money(st.vault), 'Collected from label cuts', 'red', 'vault')}${stat('Cash in circulation', money(r.reduce((a, p) => a + p.stats.balance, 0)), '', 'gold', 'dollar')}${stat('In escrow', money(r.reduce((a, p) => a + p.stats.escrow, 0)), '', '', 'lock')}</div>
-      <div class="card" style="margin-top:16px"><div class="card-head"><h3>${icon('dollar')}Send money</h3></div>
-      ${st.game.status === 'archived' ? '<p class="muted">This season is archived.</p>' : `<form data-form="grant">
-        <div class="row"><label class="field"><span>Amount ($)</span><input name="amount" type="number" step="1" required placeholder="1000" /><small>Use a negative number to fine an artist.</small></label>
-        <label class="field"><span>Memo</span><input name="memo" maxlength="140" placeholder="Bonus for best mixdown" /></label></div>
-        <div class="field"><span>Recipients</span><label class="check"><input type="checkbox" name="all" value="1" data-change="grant-all" /> Every active artist (${r.length})</label>
-          <div class="pick-list" id="grant-picks">${r.map((p) => `<label class="check"><input type="checkbox" name="u" value="${p.id}" /> ${esc(p.displayName)} <span class="dim">· ${money(p.stats.balance)}</span></label>`).join('') || '<span class="muted">No artists yet.</span>'}</div></div>
-        <button class="btn gold">${icon('dollar')}Send</button></form>`}</div>
+    const fines = st.rates.fines;
+    const payouts = st.rates.payouts.filter((x) => x.type !== 'auto');
+    body = `<div class="stats" style="margin-top:0">${stat('Cash in circulation', money(r.reduce((a, p) => a + p.stats.balance, 0)), 'Across all artists', 'gold', 'dollar')}${stat('In escrow', money(r.reduce((a, p) => a + p.stats.escrow, 0)), 'Open offers and deals', '', 'lock')}${stat('Label vault', money(st.vault), st.game.label_cut_pct ? `${st.game.label_cut_pct}% cut on completed deals` : 'No label cut this season', 'red', 'vault')}</div>
+      ${archived ? '<div class="card" style="margin-top:16px"><p class="muted">This season is archived.</p></div>' : `
+      <div class="grid-2">
+        <div class="card"><div class="card-head" style="background:var(--redd)"><h3>${icon('flag')}Charge a fee or fine</h3></div>
+          <p class="muted" style="margin-top:-4px">Amounts come from the rate sheet. Fines can take an artist below $0. They aren't announced in the lobby; each artist sees their own in Data.</p>
+          ${itemForm('charge', 'Fee or fine', fines, `${icon('flag')}Charge`)}</div>
+        <div class="stack">
+          <div class="card"><div class="card-head"><h3>${icon('award')}Pay from the rate sheet</h3></div>
+            <p class="muted" style="margin-top:-4px">The advance and the Game Bonus are paid automatically.</p>
+            ${itemForm('payout', 'Income item', payouts, `${icon('dollar')}Pay`)}</div>
+          <div class="card"><div class="card-head"><h3>${icon('dollar')}Custom amount</h3></div>
+            <form data-form="grant">
+              <div class="row"><label class="field"><span>Amount ($)</span><input name="amount" type="number" step="1" required placeholder="100" /><small>Negative to take money away.</small></label>
+              <label class="field"><span>Memo</span><input name="memo" maxlength="140" placeholder="Best mixdown of the week" /></label></div>
+              ${pickArtists('grant-picks')}
+              <button class="btn">${icon('dollar')}Send</button></form></div>
+        </div>
+      </div>`}
       <div class="card"><div class="card-head"><h3>Recent label transactions</h3><a class="more" href="#/data">Full ledger →</a></div>
-        ${st.ledger.filter((l) => ['grant', 'fine', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule)"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span></div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
+        ${st.ledger.filter((l) => ['grant', 'fine', 'bonus', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule)"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span></div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
+  } else if (t === 'rates') {
+    const r = st.rates;
+    const num = (name, v) => `<input class="rate-in" name="${name}" type="number" min="0" max="1000000" step="1" value="${v ?? 0}" aria-label="${name}" />`;
+    body = `<form data-form="rates-edit">
+      <div class="card"><div class="card-head"><h3>${icon('dollar')}Jobs</h3><span class="more">for ${esc(st.game.name)}</span></div>
+        <p class="muted" style="margin-top:-4px">Players hire at these prices; they can't set their own. Deals already made keep the price they were made at. Untick a job to stop new hires for it.</p>
+        <div class="table-wrap"><table class="t"><thead><tr><th>Job</th><th>Rate</th><th>Project rate</th><th class="r">Hireable</th></tr></thead><tbody>
+        ${r.jobs.map((j) => `<tr><td><b>${esc(j.name)}</b></td><td class="nowrap">$ ${num(`job.${j.id}.unitRate`, j.unitRate)} <span class="dim">${unitLabel(j)}</span></td><td class="nowrap">$ ${num(`job.${j.id}.projectRate`, j.projectRate)}</td>
+          <td class="r"><input type="checkbox" name="job.${esc(j.id)}.active" ${j.active ? 'checked' : ''} aria-label="${esc(j.name)} can be hired" /></td></tr>`).join('')}
+        </tbody></table></div></div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head" style="background:var(--redd)"><h3>${icon('flag')}Fees & fines</h3></div>
+          <table class="t"><tbody>${r.fines.map((f) => `<tr><td><b>${esc(f.name)}</b></td><td class="r nowrap">${f.type === 'percent' ? `<span class="dim">${f.min}% to ${f.max}% of account</span>` : `$ ${num(`fine.${f.id}.amount`, f.amount)} <span class="dim">${f.type === 'per' ? `per ${esc(f.per)}` : f.type === 'min' ? 'minimum' : ''}</span>`}</td></tr>`).join('')}</tbody></table></div>
+        <div class="card"><div class="card-head"><h3>${icon('award')}Income from the label</h3></div>
+          <table class="t"><tbody><tr><td><b>Advance</b><div class="dim" style="font-size:12px">Change it in Season settings.</div></td><td class="r num">${money(st.game.starting_balance)}</td></tr>
+          ${r.payouts.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="r nowrap">$ ${num(`payout.${x.id}.amount`, x.amount)} <span class="dim">${x.type === 'per' ? `per ${esc(x.per)}` : x.type === 'min' ? 'minimum' : ''}</span></td></tr>`).join('')}</tbody></table></div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:8px"><button class="btn primary lg">${icon('check')}Save rate sheet</button></div></form>`;
   } else if (t === 'season') {
     const g = st.game;
     const order = ['setup', 'active', 'showcase', 'archived'];
     const at = order.indexOf(g.status);
-    const desc = { setup: 'Sign artists, set the rules', active: 'Clock running, deals open', showcase: 'Listen, uploads when you open them', archived: 'Read-only, data export' };
+    const desc = { setup: 'Sign artists, set the rules', active: 'Clock running, deals open', showcase: 'Listen; music sharing when you open it', archived: 'Read-only, data export' };
     const controls = {
-      setup: `<button class="btn primary lg" data-act="phase" data-phase="active">${icon('zap')}Start the season</button><p class="dim" style="margin-top:8px">Starts Day 1 of ${g.duration_days}${g.starting_balance ? ` and pays every artist a ${money(g.starting_balance)} signing advance` : ''}.</p>`,
+      setup: `<button class="btn primary lg" data-act="phase" data-phase="active">${icon('zap')}Start the season</button><p class="dim" style="margin-top:8px">Starts Day 1 of ${g.duration_days}${g.starting_balance ? ` and pays every artist a ${money(g.starting_balance)} advance` : ''}.</p>`,
       active: `<button class="btn primary" data-act="phase" data-phase="showcase">${icon('flag')}End season & open Showcase</button><p class="dim" style="margin-top:8px">The season also ends automatically after Day ${g.duration_days}. Open deals stay open for you to settle.</p>`,
       showcase: `<button class="btn" data-act="phase" data-phase="archived">${icon('lock')}Archive season</button> <button class="btn ghost" data-act="phase" data-phase="active">Reopen deals</button><p class="dim" style="margin-top:8px">Archiving makes everything read-only. To reopen deals, make the season longer first.</p>`,
       archived: `<button class="btn" data-act="phase" data-phase="showcase">Reopen Showcase</button>`,
     }[g.status];
     body = `<div class="card"><div class="card-head"><h3>${icon('clock')}Season phase</h3></div>
       <div class="phase-track">${order.map((p, i) => `<div class="${i === at ? 'on' : i < at ? 'past' : ''}"><b>${phaseLabel[p]}</b><small>${desc[p]}</small></div>`).join('')}</div>${controls}</div>
-      <div class="card"><div class="card-head"><h3>${icon('upload')}Music uploads</h3><span class="status ${uploadsOpen() ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${uploadsOpen() ? 'Open' : 'Closed'}</span></div>
-        <p class="muted">${uploadsOpen() ? 'Artists can share links to their tracks in the Showcase right now.' : "Artists can't share music until you open uploads. Ending the season does not open them automatically."}</p>
+      <div class="card"><div class="card-head"><h3>${icon('music')}Music sharing</h3><span class="status ${uploadsOpen() ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${uploadsOpen() ? 'Open' : 'Closed'}</span></div>
+        <p class="muted">${uploadsOpen() ? 'Artists can share links (Spotify, SoundCloud, YouTube…) to their tracks in the Showcase right now.' : "Artists can't share music until you open music sharing. Ending the season does not open it automatically."}</p>
         ${g.status === 'archived' ? '<p class="dim">Reopen the Showcase to change this.</p>' : uploadToggle(uploadsOpen() ? '' : 'primary')}</div>
       <div class="card"><div class="card-head"><h3>${icon('edit')}Season settings</h3></div>${seasonForm(g, 'settings')}</div>`;
   }
-  return `${pageHead('Record Owner', 'Label Console', st ? `Run ${esc(st.game.name)}: approve deals, sign artists, move money and control the season clock.` : 'Create a season to get started.')}
-    <div class="tabs">${tabs.filter(([k]) => st || k === 'new').map(([k, l]) => `<button class="${t === k ? 'on' : ''}" data-act="console-tab" data-tab="${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</button>`).join('')}</div>
+  const label = ADMIN_TABS.find(([k]) => k === t)?.[1];
+  return `${pageHead('Record Owner · Admin', label, st && !['seasons', 'new'].includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
+    <div class="tabs">${ADMIN_TABS.filter(([k]) => st || ['seasons', 'new'].includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
 }
 
@@ -966,57 +1054,64 @@ function seasonForm(g, form) {
     <label class="field"><span>Season name</span><input name="name" maxlength="60" required value="${esc(g?.name || '')}" placeholder="Cardinal Records: Season 1" /></label>
     <div class="row">
       <label class="field"><span>Length (days)</span><input name="durationDays" type="number" min="1" max="365" required value="${g?.duration_days ?? 90}" /><small>Up to 365 days.</small></label>
-      <label class="field"><span>Signing advance ($)</span><input name="startingBalance" type="number" min="0" step="1" required value="${g?.starting_balance ?? 10000}" /><small>Each artist gets this on Day 1.</small></label>
+      <label class="field"><span>Signing advance ($)</span><input name="startingBalance" type="number" min="0" step="1" required value="${g?.starting_balance ?? 1000}" /><small>The rate sheet's advance. Each artist gets it on Day 1.</small></label>
     </div>
     <div class="row">
-      <label class="field"><span>Label cut (%)</span><input name="labelCutPct" type="number" min="0" max="50" required value="${g?.label_cut_pct ?? 10}" /><small>Taken from each completed deal.</small></label>
+      <label class="field"><span>Label cut (%)</span><input name="labelCutPct" type="number" min="0" max="50" required value="${g?.label_cut_pct ?? 0}" /><small>Optional. The rate sheet has none.</small></label>
       <label class="field"><span>Max artists</span><input name="maxPlayers" type="number" min="1" max="30" required value="${g?.max_players ?? 30}" /><small>Up to 30.</small></label>
     </div>
     <button class="btn primary">${form === 'settings' ? 'Save settings' : 'Create season'}</button></form>`;
 }
 const newSeasonForm = () => `<div class="card"><div class="card-head"><h3>${icon('plus')}Found a new label season</h3></div>
-  <p class="muted" style="margin-top:-6px">Each season is its own game with its own roster (up to 30 artists), money and Showcase.</p>${seasonForm(null, 'new-season')}</div>`;
+  <p class="muted" style="margin-top:-6px">Each season is its own game with its own roster (up to 30 artists), money, rate sheet and Showcase. You can run as many seasons as you like, side by side.</p>${seasonForm(null, 'new-season')}</div>`;
 
 // ============================================================ modals
-function offerModal({ service, sellerId }) {
+function hireModal({ jobId, sellerId }) {
   const m = me();
   const sellers = activeRoster().filter((p) => p.id !== m.id);
-  const seller = service ? person(service.userId) : sellerId ? person(sellerId) : null;
   if (!sellers.length) { toast('There are no other artists to hire yet', 'err'); return; }
-  modal(`${modalHead(service ? `Hire ${esc(seller.displayName)}` : 'Make an offer', service ? esc(service.title) : 'Propose custom work to any labelmate.')}
-    <form data-form="offer">
-      ${service ? `<input type="hidden" name="serviceId" value="${service.id}" /><input type="hidden" name="sellerId" value="${service.userId}" />`
-        : `<label class="field"><span>Artist</span><select name="sellerId" required>${sellers.map((p) => `<option value="${p.id}" ${p.id === seller?.id ? 'selected' : ''}>${esc(p.displayName)}${p.roleTitle ? ` (${esc(p.roleTitle)})` : ''}</option>`).join('')}</select></label>`}
-      <label class="field"><span>Contract title</span><input name="title" maxlength="100" required value="${esc(service?.title || '')}" placeholder="Hook vocals for my single" /></label>
-      <label class="field"><span>Terms</span><textarea name="terms" maxlength="2000" placeholder="What exactly are you paying for? Number of revisions, files to deliver, credit you'll give…"></textarea></label>
+  const jobs = S.state.rates.jobs.filter((j) => j.active);
+  const job = jobs.find((j) => j.id === jobId) || jobs[0];
+  modal(`${modalHead('Hire a labelmate', 'Prices come from the rate sheet. A teacher approves the deal before any work starts.')}
+    <form data-form="hire" id="hire-form">
+      <label class="field"><span>Job</span><select name="jobId" required data-change="hire-calc">${jobs.map((j) => `<option value="${esc(j.id)}" ${j.id === job.id ? 'selected' : ''}>${esc(j.name)} · ${money(j.unitRate)} ${unitLabel(j)}${j.projectRate ? ` · ${money(j.projectRate)} project` : ''}</option>`).join('')}</select></label>
+      <label class="field"><span>Artist</span><select name="sellerId" required>${sellers.map((p) => `<option value="${p.id}" ${p.id === sellerId ? 'selected' : ''}>${esc(p.displayName)}${p.roleTitle ? ` (${esc(p.roleTitle)})` : ''}</option>`).join('')}</select></label>
+      <div class="field"><span>Pay by</span><div class="row pricing">
+        <label class="check"><input type="radio" name="pricing" value="unit" checked data-change="hire-calc" /> <span id="hire-unit-label">The ${job.unit === 'item' ? 'item' : 'hour / class'}</span></label>
+        <label class="check"><input type="radio" name="pricing" value="project" data-change="hire-calc" /> The project rate</label></div></div>
       <div class="row">
-        <label class="field"><span>Your offer ($)</span><input name="amount" type="number" min="1" max="${m.stats.balance}" step="1" required value="${service ? Math.min(service.price, m.stats.balance) : ''}" />${service ? `<small>Asking price: ${money(service.price)}</small>` : ''}</label>
-        <label class="field"><span>Due in (days)</span><input name="dueDays" type="number" min="1" max="365" value="${service?.turnaroundDays || 7}" /></label>
+        <label class="field" id="hire-qty"><span id="hire-qty-label">${job.unit === 'item' ? 'Items' : 'Hours / class blocks'}</span><input name="quantity" type="number" min="1" max="100" step="1" value="1" required data-input-calc="1" /></label>
+        <label class="field"><span>Due in (days)</span><input name="dueDays" type="number" min="1" max="365" value="7" /></label>
       </div>
-      <div class="callout">${icon('lock')}<span>You have <b>${money(m.stats.balance)}</b> in cash. Your offer is held in <b>escrow</b> right away and only paid out when you confirm delivery. The label keeps ${game().label_cut_pct}% of the deal. If the deal falls through, you get it all back.</span></div>
+      <label class="field"><span>What it's for (optional)</span><input name="title" maxlength="100" placeholder="${esc(job.name)} for my single" /></label>
+      <label class="field"><span>Details</span><textarea name="terms" maxlength="2000" placeholder="What exactly needs doing? Files to deliver, credit you'll give…"></textarea></label>
+      <div class="callout">${icon('lock')}<span>Total: <b id="hire-total" class="mono">${money(job.unitRate)}</b>. You have <b>${money(m.stats.balance)}</b>. The total is held in <b>escrow</b> right away and paid out when you confirm delivery. If the deal falls through, you get it all back.</span></div>
       <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('send')}Send offer</button></div>
     </form>`);
 }
 
-function serviceModal(s) {
-  modal(`${modalHead(s ? 'Edit service' : 'List a service', 'Tell the label what you can do and what it costs.')}
-    <form data-form="service">${s ? `<input type="hidden" name="id" value="${s.id}" />` : ''}
-      <label class="field"><span>Service</span><input name="title" maxlength="80" required value="${esc(s?.title || '')}" placeholder="Trap beat with stems" /></label>
-      <label class="field"><span>Category</span><select name="category">${CATEGORIES.map((c) => `<option ${s?.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
-      <label class="field"><span>Description</span><textarea name="description" maxlength="1000" placeholder="What's included? Revisions? File formats?">${esc(s?.description || '')}</textarea></label>
-      <div class="row"><label class="field"><span>Price ($)</span><input name="price" type="number" min="1" step="1" required value="${s?.price || ''}" /></label>
-        <label class="field"><span>Turnaround (days)</span><input name="turnaroundDays" type="number" min="1" max="365" required value="${s?.turnaroundDays || 7}" /></label></div>
-      ${s ? `<label class="check" style="margin-bottom:14px"><input type="checkbox" name="active" ${s.active ? 'checked' : ''} /> Listed on the Marketplace</label>` : ''}
-      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${s ? 'Save' : 'List service'}</button></div>
-    </form>`);
+/** Recompute the hire total as the job, pricing or quantity changes. */
+function hireCalc() {
+  const f = $('#hire-form');
+  if (!f) return;
+  const job = S.state.rates.jobs.find((j) => j.id === f.jobId.value);
+  const project = f.querySelector('input[name=pricing]:checked')?.value === 'project';
+  const projectRadio = f.querySelector('input[name=pricing][value=project]');
+  projectRadio.disabled = !job.projectRate;
+  if (!job.projectRate && project) f.querySelector('input[name=pricing][value=unit]').checked = true;
+  const useProject = project && !!job.projectRate;
+  $('#hire-unit-label').textContent = `The ${job.unit === 'item' ? 'item' : 'hour / class'} (${money(job.unitRate)} each)`;
+  $('#hire-qty-label').textContent = job.unit === 'item' ? 'Items' : 'Hours / class blocks';
+  $('#hire-qty').hidden = useProject;
+  f.quantity.required = !useProject;
+  const qty = Math.max(1, Math.floor(Number(f.quantity.value) || 1));
+  $('#hire-total').textContent = money(useProject ? job.projectRate : job.unitRate * qty);
 }
 
 function contractActionModal(c, a) {
   const cfg = {
     accept: ['Sign this contract?', `You agree to deliver "${esc(c.title)}" for ${money(c.amount)}. It goes to the label for approval next.`, 'Sign contract', 'primary'],
     decline: ['Decline this offer?', `${esc(nameOf(c.buyerId))} gets their ${money(c.escrow)} back.`, 'Decline', 'danger'],
-    counter: ['Counter offer', `${esc(nameOf(c.buyerId))} offered ${money(c.amount)}. Name your price.`, 'Send counter', 'primary'],
-    accept_counter: ['Accept the counter?', `${esc(nameOf(c.sellerId))} wants ${money(c.amount)}. Escrow will be adjusted to match.`, `Accept ${money(c.amount)}`, 'primary'],
     withdraw: ['Withdraw your offer?', `Your ${money(c.escrow)} comes back to you.`, 'Withdraw', 'danger'],
     approve: ['Approve this deal?', `${esc(nameOf(c.buyerId))} hires ${esc(nameOf(c.sellerId))} for ${money(c.amount)}. It will be announced in the lobby.`, 'Approve deal', 'green'],
     reject: ['Reject this deal?', `The ${money(c.escrow)} in escrow goes back to ${esc(nameOf(c.buyerId))}.`, 'Reject', 'danger'],
@@ -1025,11 +1120,12 @@ function contractActionModal(c, a) {
     confirm: ['Confirm delivery & pay', `This releases ${money(c.escrow)} from escrow to ${esc(nameOf(c.sellerId))} (minus the ${game().label_cut_pct}% label cut). This can't be undone.`, 'Confirm & pay', 'green'],
     complete: ['Force pay out?', `Release ${money(c.escrow)} to ${esc(nameOf(c.sellerId))} now, as if the client confirmed.`, 'Pay out', 'primary'],
     cancel: ['Void this contract?', `Any escrow (${money(c.escrow)}) is returned to ${esc(nameOf(c.buyerId))}.`, 'Void contract', 'danger'],
+    late_fee: ['Charge the late fee?', `${esc(nameOf(c.sellerId))} is charged the rate sheet's ${money(S.state.rates.fines.find((f) => f.id === 'late-incomplete')?.amount)} late / incomplete fee. ${esc(nameOf(c.buyerId))} is not charged, and the deal carries on.`, 'Charge late fee', 'danger'],
+    undone: ['Mark the work not done?', `${esc(nameOf(c.sellerId))} is charged the ${money(S.state.rates.fines.find((f) => f.id === 'undone')?.amount)} undone fine, ${esc(nameOf(c.buyerId))} gets their ${money(c.escrow)} back, and the contract is cancelled.`, 'Fine & refund', 'danger'],
   }[a];
   const [title, sub, btn, kind] = cfg;
   modal(`${modalHead(title, sub)}
     <form data-form="contract-action"><input type="hidden" name="id" value="${c.id}" /><input type="hidden" name="action" value="${a}" />
-      ${a === 'counter' ? `<label class="field"><span>Your price ($)</span><input name="amount" type="number" min="1" step="1" required value="${c.amount}" /></label>` : ''}
       ${a === 'confirm' ? `<div class="field"><span>Rate the work</span><div class="stars" id="stars">${[1, 2, 3, 4, 5].map((n) => `<label class="${n <= 5 ? 'on' : ''}"><input type="radio" name="rating" value="${n}" ${n === 5 ? 'checked' : ''} data-change="stars" />${icon('star')}</label>`).join('')}</div></div>` : ''}
       <label class="field"><span>Note ${['revise', 'reject'].includes(a) ? '' : '(optional)'}</span><textarea name="note" maxlength="1000" ${['revise'].includes(a) ? 'required' : ''} placeholder="${a === 'deliver' ? 'Link to the files, what you delivered…' : a === 'reject' ? 'Why is the label rejecting this?' : 'Anything to add?'}"></textarea></label>
       <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn ${kind}">${btn}</button></div>
@@ -1066,6 +1162,8 @@ function editPlayerModal(p) {
       <label class="field"><span>Username</span><input name="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_.\\-]{3,24}" value="${esc(p.username)}" /></label>
       <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" required value="${esc(p.displayName)}" /></label>
       <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" value="${esc(p.roleTitle)}" /></label>
+      <label class="field"><span>Season</span><select name="gameId">${S.games.filter((x) => x.status !== 'archived' || x.id === p.gameId).map((x) => `<option value="${x.id}" ${x.id === p.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <small>Moving an artist keeps their money and deals in this season's records. In the new season they start fresh.</small></label>
       <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">Save</button></div>
     </form>`);
 }
@@ -1103,12 +1201,13 @@ function currentRoute() {
 
 function viewFor() {
   const [r, id] = currentRoute();
-  if (!S.state) return isOwner() ? consoleView() : empty('lock', "You're not on a label yet", 'Ask your Record Owner to sign you.');
+  if (!S.state) return isOwner() ? adminView(r === 'admin' ? id : 'new') : empty('lock', "You're not on a label yet", 'Ask your Record Owner to sign you.');
   if (!isOwner() && !me()) return empty('lock', 'Account not found on this roster');
   switch (r) {
     case 'hq': return hqView();
     case 'lobby': return lobbyView();
-    case 'market': return marketView();
+    case 'rates':
+    case 'market': return ratesView();
     case 'contracts': return contractsView();
     case 'contract': return contractDetailView(id);
     case 'roster': return rosterView();
@@ -1118,7 +1217,8 @@ function viewFor() {
     case 'guide': return guideView();
     case 'profile': return profileView();
     case 'data': return dataView();
-    case 'console': return isOwner() ? consoleView() : hqView();
+    case 'admin':
+    case 'console': return isOwner() ? adminView(id) : hqView();
     default: return hqView();
   }
 }
@@ -1154,14 +1254,18 @@ const ACTIONS = {
   'login-back': () => { S.login = freshLogin(); render(); },
   'pin-key': (el) => pinKey(el.dataset.k),
   logout: async () => { await api('POST', '/api/logout').catch(() => {}); S.user = null; S.state = null; S.login = freshLogin(); render(); },
-  'market-cat': (el) => { S.ui.marketCat = el.dataset.cat; render(); },
   'contract-tab': (el) => { S.ui.contractTab = el.dataset.tab; render(); },
   'chart-tab': (el) => { S.ui.chartTab = el.dataset.tab; render(); },
-  'console-tab': (el) => { S.ui.consoleTab = el.dataset.tab; if (currentRoute()[0] !== 'console') location.hash = '#/console'; else render(); },
-  'new-service': () => serviceModal(null),
-  'edit-service': (el) => serviceModal(S.state.services.find((s) => s.id === Number(el.dataset.id))),
-  offer: (el) => offerModal({ service: S.state.services.find((s) => s.id === Number(el.dataset.id)) }),
-  'custom-offer': (el) => offerModal({ sellerId: Number(el.dataset.seller) || null }),
+  'console-tab': (el) => { location.hash = `#/admin/${el.dataset.tab}`; },
+  'admin-menu': () => { S.ui.adminOpen = !S.ui.adminOpen; render(); },
+  'admin-go': () => { S.ui.adminOpen = false; },
+  'open-season': async (el) => {
+    S.gameId = Number(el.dataset.id);
+    store.set('cr.game', S.gameId);
+    await refresh();
+    if (el.dataset.tab) location.hash = `#/admin/${el.dataset.tab}`;
+  },
+  hire: (el) => hireModal({ jobId: el.dataset.job, sellerId: Number(el.dataset.seller) || null }),
   contract: (el) => contractActionModal(S.state.contracts.find((c) => c.id === Number(el.dataset.id)), el.dataset.a),
   upload: uploadModal,
   like: async (el) => {
@@ -1221,21 +1325,45 @@ const ACTIONS = {
   },
   uploads: (el) => {
     const open = el.dataset.open === '1';
-    confirmModal(open ? 'Open music uploads?' : 'Close music uploads?',
-      open ? 'Every artist on this season can upload tracks to the Showcase, and the lobby is told.' : 'Artists won\'t be able to upload new tracks. Tracks already uploaded stay up.',
-      open ? 'Open uploads' : 'Close uploads', open ? 'primary' : 'danger',
-      () => act(() => api('POST', `/api/games/${S.gameId}/uploads`, { open }), open ? 'Uploads are open' : 'Uploads closed'));
+    confirmModal(open ? 'Open music sharing?' : 'Close music sharing?',
+      open ? 'Every artist on this season can share links to their tracks in the Showcase, and the lobby is told.' : 'Artists won\'t be able to share new tracks. Tracks already shared stay up.',
+      open ? 'Open music sharing' : 'Close music sharing', open ? 'primary' : 'danger',
+      () => act(() => api('POST', `/api/games/${S.gameId}/uploads`, { open }), open ? 'Music sharing is open' : 'Music sharing closed'));
   },
   phase: (el) => {
     const ph = el.dataset.phase;
     const text = {
       active: game().status === 'setup' ? 'The clock starts now and signing advances are paid out.' : 'Deals reopen for the remaining days.',
-      showcase: game().status === 'archived' ? 'Artists can listen again. Open uploads separately if you want them.' : "No new deals can be made. Music uploads stay closed until you open them.",
+      showcase: game().status === 'archived' ? 'Artists can listen again. Open music sharing separately if you want it.' : "No new deals can be made. Music sharing stays closed until you open it.",
       archived: 'The season becomes read-only. Data stays downloadable.',
     }[ph];
     confirmModal(`Move to ${phaseLabel[ph]}?`, text, 'Confirm', 'primary', () => act(() => api('POST', `/api/games/${S.gameId}/phase`, { phase: ph }), 'Season updated'));
   },
 };
+
+/** Charge a fee/fine or pay an income item from the rate sheet. */
+async function chargeItem(d, f, verb) {
+  const opt = f.itemId.selectedOptions[0];
+  const body = { itemId: d.itemId, memo: d.memo, userIds: d.all ? 'all' : new FormData(f).getAll('u').map(Number) };
+  if (opt.dataset.type === 'per') body.quantity = Number(d.quantity);
+  if (opt.dataset.type === 'min') body.amount = Number(d.amount);
+  if (opt.dataset.type === 'percent') body.percent = Number(d.percent);
+  const r = await act(() => api('POST', `/api/games/${S.gameId}/charges`, body));
+  if (!r) return;
+  const total = r.charged.reduce((a, x) => a + x.amount, 0);
+  toast(r.charged.length ? `${verb} ${plural(r.charged.length, 'artist')} · ${money(total)} total` : 'Nothing to charge: those artists have no cash', r.charged.length ? 'ok' : 'err');
+}
+
+/** Show the extra fields (how many / amount / percent) that the chosen rate-sheet item needs. */
+function itemFields(select) {
+  const f = select.form;
+  const o = select.selectedOptions[0].dataset;
+  for (const el of f.querySelectorAll('[data-show]')) el.hidden = el.dataset.show !== o.type;
+  const per = f.querySelector('[data-per-label]');
+  if (per) per.textContent = o.per;
+  if (o.type === 'min') { f.amount.min = o.amount; f.amount.value = o.amount; }
+  if (o.type === 'percent') { f.percent.min = o.min; f.percent.max = o.max; f.percent.value = o.min; }
+}
 
 const FORMS = {
   lookup: async (d) => {
@@ -1246,15 +1374,10 @@ const FORMS = {
     render();
   },
   chat: async (d, f) => { if (await act(() => api('POST', `/api/games/${S.gameId}/feed`, { message: d.message }))) f.reset(); },
-  offer: async (d) => {
-    const ok = await act(() => api('POST', `/api/games/${S.gameId}/contracts`, { ...d, sellerId: Number(d.sellerId), amount: Number(d.amount), dueDays: d.dueDays ? Number(d.dueDays) : null }), 'Offer sent. Your money is in escrow.');
+  hire: async (d) => {
+    const body = { ...d, sellerId: Number(d.sellerId), quantity: d.pricing === 'project' ? null : Number(d.quantity), dueDays: d.dueDays ? Number(d.dueDays) : null };
+    const ok = await act(() => api('POST', `/api/games/${S.gameId}/contracts`, body), 'Offer sent. Your money is in escrow.');
     if (ok) { closeModal(); S.ui.contractTab = 'open'; location.hash = `#/contract/${ok.id}`; }
-  },
-  service: async (d) => {
-    const body = { ...d, price: Number(d.price), turnaroundDays: Number(d.turnaroundDays) };
-    const ok = d.id ? await act(() => api('PATCH', `/api/services/${d.id}`, { ...body, active: !!d.active }), 'Service updated')
-      : await act(() => api('POST', `/api/games/${S.gameId}/services`, body), 'Service listed on the Marketplace');
-    if (ok) closeModal();
   },
   'contract-action': async (d) => {
     const body = { action: d.action, note: d.note || '' };
@@ -1268,12 +1391,27 @@ const FORMS = {
   profile: (d) => act(async () => { await api('PUT', '/api/me', d); await loadMe(); }, 'Profile saved'),
   pin: async (d, f) => { if (await act(async () => { await api('PUT', '/api/me/pin', d); await loadMe(); }, 'PIN updated')) f.reset(); },
   'add-player': async (d, f) => { if (await act(() => api('POST', `/api/games/${S.gameId}/players`, d), `${d.displayName || d.username} signed to the label`)) f.reset(); },
-  'edit-player': async (d) => { if (await act(() => api('PATCH', `/api/players/${d.id}`, d), 'Artist updated')) closeModal(); },
+  'edit-player': async (d) => {
+    const ok = await act(async () => { await api('PATCH', `/api/players/${d.id}`, { ...d, gameId: Number(d.gameId) }); await loadMe(); }, 'Artist updated');
+    if (ok) closeModal();
+  },
   grant: async (d, f) => {
-    const ids = new FormData(f).getAll('u').map(Number);
     const amount = Number(d.amount);
-    const body = { amount, memo: d.memo, userIds: d.all ? 'all' : ids };
-    if (await act(() => api('POST', `/api/games/${S.gameId}/grants`, body), amount > 0 ? `Sent ${money(amount)}` : `Fined ${money(-amount)}`)) f.reset();
+    const body = { amount, memo: d.memo, userIds: d.all ? 'all' : new FormData(f).getAll('u').map(Number) };
+    if (await act(() => api('POST', `/api/games/${S.gameId}/grants`, body), amount > 0 ? `Sent ${money(amount)}` : `Took ${money(-amount)}`)) f.reset();
+  },
+  charge: (d, f) => chargeItem(d, f, 'Charged'),
+  payout: (d, f) => chargeItem(d, f, 'Paid'),
+  'rates-edit': (d, f) => {
+    const body = { jobs: {}, payouts: {}, fines: {} };
+    for (const el of f.querySelectorAll('input[name]')) {
+      const [kind, id, field] = el.name.split('.');
+      const group = { job: 'jobs', payout: 'payouts', fine: 'fines' }[kind];
+      if (!group) continue;
+      body[group][id] = body[group][id] || {};
+      body[group][id][field] = el.type === 'checkbox' ? el.checked : Number(el.value);
+    }
+    return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
   'new-season': async (d) => {
@@ -1289,11 +1427,17 @@ const FORMS = {
 };
 
 document.addEventListener('click', (e) => {
+  if (S.ui.adminOpen && !e.target.closest('.admin-menu')) { S.ui.adminOpen = false; render(); }
   const el = e.target.closest('[data-act]');
   if (!el) return;
   if (el.tagName === 'A' && el.getAttribute('href')) return;
   const fn = ACTIONS[el.dataset.act];
-  if (fn) { e.preventDefault(); fn(el, e); }
+  if (!fn) return;
+  // The modal backdrop wraps the whole dialog: only a click on the backdrop itself is
+  // ours, so radios, checkboxes and links inside the dialog keep working.
+  if (el.dataset.act === 'modal-bg' && e.target !== el) return;
+  e.preventDefault();
+  fn(el, e);
 });
 
 document.addEventListener('submit', (e) => {
@@ -1314,8 +1458,12 @@ document.addEventListener('change', async (e) => {
   } else if (k === 'guide-done') {
     await setGuideDone(el.dataset.step, el.checked);
     rerenderGuide();
-  } else if (k === 'grant-all') {
-    $$('#grant-picks input').forEach((i) => { i.disabled = el.checked; });
+  } else if (k === 'pick-all') {
+    $$(`#${el.dataset.target} input`).forEach((i) => { i.disabled = el.checked; });
+  } else if (k === 'item-pick') {
+    itemFields(el);
+  } else if (k === 'hire-calc') {
+    hireCalc();
   } else if (k === 'stars') {
     const v = Number(el.value);
     $$('#stars label').forEach((l, i) => l.classList.toggle('on', i < v));
@@ -1323,11 +1471,12 @@ document.addEventListener('change', async (e) => {
 });
 
 document.addEventListener('input', (e) => {
-  if (e.target.dataset.input === 'market-q') { S.ui.marketQ = e.target.value; render(); }
+  if (e.target.dataset.inputCalc) hireCalc();
 });
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalOpen()) return closeModal();
+  if (e.key === 'Escape' && S.ui.adminOpen) { S.ui.adminOpen = false; render(); return $('.admin-btn')?.focus(); }
   if (!S.user && S.login.step !== 'user') {
     if (/^\d$/.test(e.key)) pinKey(e.key);
     else if (e.key === 'Backspace') pinKey('del');
@@ -1335,7 +1484,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-window.addEventListener('hashchange', () => { closeModal(); render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => { S.ui.adminOpen = false; closeModal(); render(); window.scrollTo(0, 0); });
 
 // Keep everyone in sync: re-fetch the label state every 10s, without clobbering
 // an open modal or a form someone is typing in.

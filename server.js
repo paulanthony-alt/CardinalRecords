@@ -6,6 +6,7 @@ const { db, tx, migrate } = require('./src/db');
 const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const G = require('./src/game');
+const R = require('./src/rates');
 const { fail, str, int } = G;
 
 const app = express();
@@ -140,12 +141,19 @@ app.post('/api/logout', async (req, res) => {
 
 // ---------- me ----------
 app.get('/api/me', auth, async (req, res) => {
-  const games = req.user.role === 'owner'
-    ? await db.all('SELECT * FROM games ORDER BY created_at DESC')
-    : await db.all('SELECT * FROM games WHERE id = ?', req.user.game_id ?? -1);
+  const isOwner = req.user.role === 'owner';
+  const games = isOwner
+    ? await db.all(`SELECT g.id, u.display_name AS created_by_name,
+        (SELECT COUNT(*) FROM users p WHERE p.game_id = g.id AND p.role = 'player' AND p.active = 1) AS players
+        FROM games g LEFT JOIN users u ON u.id = g.created_by ORDER BY g.created_at DESC`)
+    : await db.all('SELECT id FROM games WHERE id = ?', req.user.game_id ?? -1);
   res.json({
     user: { ...publicUser(req.user, { withPin: false }), startingPin: usingStartingPin(req.user) },
-    games: await Promise.all(games.map(async (g) => { const gg = await G.getGame(g.id); return { ...gg, clock: G.clock(gg) }; })),
+    games: await Promise.all(games.map(async (g) => {
+      const gg = await G.getGame(g.id);
+      const { rate_sheet, ...rest } = gg;
+      return { ...rest, clock: G.clock(gg), players: g.players, createdByName: g.created_by_name };
+    })),
   });
 });
 
@@ -187,8 +195,8 @@ function gameSettings(b, existing) {
   const out = {
     name: str(b.name ?? existing?.name, 'Label season name', { min: 1, max: 60 }),
     duration_days: int(b.durationDays ?? existing?.duration_days, 'Season length', { min: 1, max: G.MAX_DAYS }),
-    starting_balance: int(b.startingBalance ?? existing?.starting_balance ?? 0, 'Signing advance', { min: 0, max: 100_000_000 }),
-    label_cut_pct: int(b.labelCutPct ?? existing?.label_cut_pct ?? 10, 'Label cut', { min: 0, max: 50 }),
+    starting_balance: int(b.startingBalance ?? existing?.starting_balance ?? 1000, 'Signing advance', { min: 0, max: 100_000_000 }),
+    label_cut_pct: int(b.labelCutPct ?? existing?.label_cut_pct ?? 0, 'Label cut', { min: 0, max: 50 }),
     max_players: int(b.maxPlayers ?? existing?.max_players ?? G.MAX_PLAYERS, 'Max players', { min: 1, max: G.MAX_PLAYERS }),
   };
   return out;
@@ -233,7 +241,7 @@ app.post('/api/games/:gameId/phase', auth, ownerOnly, async (req, res) => {
       await G.post(game.id, 'phase', req.user.id, 'The season is back on. Deals are open again.');
     } else if (phase === 'showcase') {
       await db.run("UPDATE games SET status = 'showcase', ended_at = COALESCE(ended_at, ?) WHERE id = ?", Date.now(), game.id);
-      await G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : "The Record Owner called the season. Get your music ready: uploads to the Showcase open once a Record Owner activates them.");
+      await G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : "The Record Owner called the season. Get your music ready: sharing music to the Showcase opens once a Record Owner turns it on.");
     } else if (phase === 'archived') {
       await db.run("UPDATE games SET status = 'archived', uploads_open = 0 WHERE id = ?", game.id);
       await G.post(game.id, 'phase', req.user.id, 'This season has been archived. Thanks for playing Cardinal Records.');
@@ -242,16 +250,16 @@ app.post('/api/games/:gameId/phase', auth, ownerOnly, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Music uploads stay closed until a Record Owner opens them.
+// Sharing music to the Showcase stays closed until a Record Owner opens it.
 app.post('/api/games/:gameId/uploads', auth, ownerOnly, async (req, res) => {
   const game = await gameFor(req);
   const open = !!req.body.open;
-  if (open && game.status === 'archived') fail('Reopen the Showcase before opening uploads');
+  if (open && game.status === 'archived') fail('Reopen the Showcase before opening music sharing');
   if (open === !!game.uploads_open) return res.json({ ok: true });
   await db.run('UPDATE games SET uploads_open = ? WHERE id = ?', open ? 1 : 0, game.id);
   await G.post(game.id, 'phase', req.user.id, open
-    ? 'Music uploads are OPEN! Head to the Showcase and drop the tracks you made this season.'
-    : 'Music uploads are closed for now.');
+    ? 'Music sharing is OPEN! Head to the Showcase and share a link to the tracks you made this season.'
+    : 'Music sharing is closed for now.');
   res.json({ ok: true });
 });
 
@@ -293,15 +301,24 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
   const displayName = req.body.displayName != null ? str(req.body.displayName, 'Artist name', { min: 1, max: 40 }) : p.display_name;
   const roleTitle = req.body.roleTitle != null ? str(req.body.roleTitle, 'Role', { max: 40 }) : p.role_title;
   let active = p.active;
-  if (req.body.active != null) {
-    active = req.body.active ? 1 : 0;
-    if (active && !p.active) {
-      const g = await G.getGame(p.game_id);
-      const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1", g.id)).n;
-      if (count >= g.max_players) fail('Roster is full');
+  if (req.body.active != null) active = req.body.active ? 1 : 0;
+  // Moving an artist to another season: their money and deals stay in the old season's
+  // records; in the new one they start fresh (with its advance if it's already live).
+  const gameId = req.body.gameId != null ? int(req.body.gameId, 'Season') : p.game_id;
+  const target = await G.getGame(gameId);
+  const moving = gameId !== p.game_id;
+  if (moving && target.status === 'archived') fail('That season is archived');
+  await tx(async () => {
+    if (active && (moving || !p.active)) {
+      const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1 AND id != ?", gameId, p.id)).n;
+      if (count >= target.max_players) fail(`${target.name} is full (${target.max_players} artists max)`);
     }
-  }
-  await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ? WHERE id = ?', username, displayName, roleTitle, active, p.id);
+    await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, p.id);
+    if (moving) {
+      if (target.status === 'active') await G.payAdvance(target, p.id);
+      await G.post(gameId, 'join', p.id, `${displayName} joined ${target.name}${roleTitle ? ` as ${roleTitle}` : ''}.`);
+    }
+  });
   if (!active) await db.run('DELETE FROM sessions WHERE user_id = ?', p.id);
   res.json({ ok: true });
 });
@@ -321,23 +338,81 @@ app.post('/api/games/:gameId/grants', auth, ownerOnly, async (req, res) => {
   const amount = int(req.body.amount, 'Amount', { min: -100_000_000, max: 100_000_000 });
   if (amount === 0) fail('Amount cannot be zero');
   const memo = str(req.body.memo, 'Memo', { max: 140 });
-  let ids = req.body.userIds === 'all'
-    ? (await db.all("SELECT id FROM users WHERE role = 'player' AND game_id = ? AND active = 1", game.id)).map((r) => r.id)
-    : (Array.isArray(req.body.userIds) ? req.body.userIds : []).map((v) => int(v, 'Player'));
-  if (!ids.length) fail('Pick at least one artist');
   await tx(async () => {
-    for (const id of ids) {
-      const p = await db.get("SELECT * FROM users WHERE id = ? AND role = 'player' AND game_id = ?", id, game.id);
-      if (!p) fail('One of those artists is not on this roster');
-      if (amount < 0 && (await G.balanceOf(p.id)) + amount < 0) fail(`${p.display_name} only has ${G.fmt$(await G.balanceOf(p.id))}`);
-      await G.ledgerEntry(game.id, p.id, amount, amount > 0 ? 'grant' : 'fine', { memo, by: req.user.id });
+    const players = await recipients(game, req.body.userIds);
+    for (const p of players) await G.ledgerEntry(game.id, p.id, amount, amount > 0 ? 'grant' : 'fine', { memo, by: req.user.id });
+    // Payments are announced in the lobby; fines aren't. Each artist sees their own in Data.
+    if (amount > 0) {
+      const who = req.body.userIds === 'all' ? 'every artist' : players.map((p) => p.display_name).join(', ');
+      await G.post(game.id, 'grant', req.user.id, `The label paid ${G.fmt$(amount)} to ${who}${memo ? `: ${memo}` : ''}.`);
     }
-    const who = req.body.userIds === 'all' ? 'every artist' : (await Promise.all(ids.map(G.nameOf))).join(', ');
-    await G.post(game.id, amount > 0 ? 'grant' : 'fine', req.user.id,
-      amount > 0 ? `The label granted ${G.fmt$(amount)} to ${who}${memo ? `: ${memo}` : ''}.`
-                 : `The label fined ${who} ${G.fmt$(-amount)}${memo ? `: ${memo}` : ''}.`);
   });
   res.json({ ok: true });
+});
+
+/** The artists a treasury action applies to: 'all' active artists, or a list of ids on this roster. */
+async function recipients(game, userIds) {
+  if (userIds === 'all') {
+    const all = await db.all("SELECT * FROM users WHERE role = 'player' AND game_id = ? AND active = 1", game.id);
+    if (!all.length) fail('There are no artists on this roster yet');
+    return all;
+  }
+  const ids = (Array.isArray(userIds) ? userIds : []).map((v) => int(v, 'Player'));
+  if (!ids.length) fail('Pick at least one artist');
+  const players = [];
+  for (const id of ids) {
+    const p = await db.get("SELECT * FROM users WHERE id = ? AND role = 'player' AND game_id = ?", id, game.id);
+    if (!p) fail('One of those artists is not on this roster');
+    players.push(p);
+  }
+  return players;
+}
+
+// Charge a fee/fine or pay an income item straight from the rate sheet.
+app.post('/api/games/:gameId/charges', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const sheet = R.sheetFor(game);
+  const fine = R.findItem(sheet.fines, String(req.body.itemId || ''));
+  const payout = fine ? null : R.findItem(sheet.payouts, String(req.body.itemId || ''));
+  const item = fine || payout;
+  if (!item || item.type === 'auto') fail('Pick an item from the rate sheet');
+  const note = str(req.body.memo, 'Note', { max: 140 });
+  let quantity = 1;
+  let amount = item.amount;
+  if (item.type === 'per') {
+    quantity = int(req.body.quantity, `Number of ${item.per}s`, { min: 1, max: 100 });
+    amount = item.amount * quantity;
+  } else if (item.type === 'min') {
+    amount = int(req.body.amount, `${item.name} amount`, { min: item.amount, max: 100_000_000 });
+  }
+  const percent = item.type === 'percent' ? int(req.body.percent, 'Percent of account', { min: item.min, max: item.max }) : null;
+  const label = `${item.name}${item.type === 'per' ? ` (${quantity} ${item.per}${quantity === 1 ? '' : 's'})` : ''}${percent ? ` (${percent}% of account)` : ''}${note ? `: ${note}` : ''}`;
+  const charged = await tx(async () => {
+    const players = await recipients(game, req.body.userIds);
+    const out = [];
+    for (const p of players) {
+      // A percentage fine takes that share of the cash the artist has now.
+      const due = percent ? Math.floor((Math.max(0, await G.balanceOf(p.id, game.id)) * percent) / 100) : amount;
+      if (!due) continue;
+      await G.ledgerEntry(game.id, p.id, fine ? -due : due, fine ? 'fine' : 'grant', { memo: label, by: req.user.id });
+      out.push({ userId: p.id, amount: due });
+    }
+    if (payout && out.length) {
+      const who = req.body.userIds === 'all' ? 'every artist' : players.map((p) => p.display_name).join(', ');
+      await G.post(game.id, 'grant', req.user.id, `The label paid ${who} ${G.fmt$(amount)} for ${item.name.toLowerCase()}.`);
+    }
+    return out;
+  });
+  res.json({ ok: true, charged });
+});
+
+// Owners change the season's rate sheet amounts. Deals already made keep their price.
+app.put('/api/games/:gameId/rates', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  const overrides = R.overridesFrom(req.body || {}, fail);
+  await db.run('UPDATE games SET rate_sheet = ? WHERE id = ?', overrides, game.id);
+  res.json({ ok: true, rates: R.sheetFor({ ...game, rate_sheet: overrides }) });
 });
 
 // ---------- full game state ----------
@@ -349,11 +424,6 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
   const roster = (await G.playerStats(game)).map((r) => ({
     ...publicUser(r.player, { withPin: isOwner }), stats: r.stats, progress: r.progress, badges: r.badges,
     tutorial: r.player.id === me.id || isOwner ? r.tutorial : undefined,
-  }));
-
-  const services = (await db.all('SELECT * FROM services WHERE game_id = ? ORDER BY created_at DESC', game.id)).map((s) => ({
-    id: s.id, userId: s.user_id, title: s.title, description: s.description, category: s.category,
-    price: s.price, turnaroundDays: s.turnaround_days, active: !!s.active, createdAt: s.created_at,
   }));
 
   const pub = G.PUBLIC_STATUSES.map((s) => `'${s}'`).join(',');
@@ -370,7 +440,8 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
   const contractsOut = contracts.map((c) => {
     const party = isOwner || c.buyer_id === me.id || c.seller_id === me.id;
     return {
-      id: c.id, buyerId: c.buyer_id, sellerId: c.seller_id, serviceId: c.service_id, title: c.title,
+      id: c.id, buyerId: c.buyer_id, sellerId: c.seller_id, title: c.title,
+      jobId: c.job_id, pricing: c.pricing, quantity: c.quantity, unitRate: c.unit_rate,
       terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
       rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
       events: party ? (events.get(c.id) || []).map((e) => ({ actorId: e.actor_id, action: e.action, note: e.note, amount: e.amount, at: e.created_at })) : [],
@@ -395,10 +466,18 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
   const vault = (await db.get('SELECT COALESCE(SUM(amount), 0) AS v FROM ledger WHERE game_id = ? AND user_id IS NULL', game.id)).v;
   const owners = (await db.all("SELECT id, display_name, color FROM users WHERE role = 'owner'"))
     .map((o) => ({ id: o.id, displayName: o.display_name, color: o.color }));
+  // Artists who were moved to another season still appear in this season's records by name.
+  const former = (await db.all(
+    `SELECT id, display_name, color FROM users WHERE role = 'player' AND game_id IS DISTINCT FROM ? AND id IN (
+       SELECT user_id FROM ledger WHERE game_id = ? UNION SELECT buyer_id FROM contracts WHERE game_id = ? UNION SELECT seller_id FROM contracts WHERE game_id = ?)`,
+    game.id, game.id, game.id, game.id
+  )).map((u) => ({ id: u.id, displayName: u.display_name, color: u.color, former: true }));
 
+  const { rate_sheet, ...gameOut } = game;
   res.json({
-    game: { ...game, clock: G.clock(game) },
-    roster, owners, services, contracts: contractsOut, feed, tracks, vault,
+    game: { ...gameOut, clock: G.clock(game) },
+    rates: R.sheetFor(game),
+    roster, owners, former, contracts: contractsOut, feed, tracks, vault,
     ledger: ledgerRows.map((l) => ({ id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at })),
     serverTime: Date.now(),
   });
@@ -411,44 +490,6 @@ app.post('/api/games/:gameId/feed', auth, async (req, res) => {
   const message = str(req.body.message, 'Message', { min: 1, max: 280 });
   const kind = req.user.role === 'owner' ? 'announcement' : 'chat';
   await G.post(game.id, kind, req.user.id, message);
-  res.json({ ok: true });
-});
-
-// ---------- services ----------
-const CATEGORIES = ['Production', 'Beat', 'Vocals', 'Songwriting', 'Mixing', 'Mastering', 'Instrument', 'Artwork', 'Video', 'Marketing', 'Other'];
-
-function serviceFields(b, existing) {
-  return {
-    title: str(b.title ?? existing?.title, 'Service name', { min: 1, max: 80 }),
-    description: str(b.description ?? existing?.description, 'Description', { max: 1000 }),
-    category: CATEGORIES.includes(b.category) ? b.category : existing?.category || 'Other',
-    price: int(b.price ?? existing?.price, 'Price', { min: 1, max: 100_000_000 }),
-    turnaround_days: int(b.turnaroundDays ?? existing?.turnaround_days ?? 7, 'Turnaround', { min: 1, max: G.MAX_DAYS }),
-  };
-}
-
-app.post('/api/games/:gameId/services', auth, async (req, res) => {
-  const game = await gameFor(req);
-  if (req.user.role !== 'player') fail('Only artists can list services', 403);
-  if (!['setup', 'active'].includes(game.status)) fail('The marketplace is closed for this season');
-  const count = (await db.get('SELECT COUNT(*) AS n FROM services WHERE user_id = ? AND active = 1', req.user.id)).n;
-  if (count >= 12) fail('You can list up to 12 services');
-  const s = serviceFields(req.body);
-  const { id } = await db.run(
-    'INSERT INTO services (game_id, user_id, title, description, category, price, turnaround_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    game.id, req.user.id, s.title, s.description, s.category, s.price, s.turnaround_days, Date.now()
-  );
-  await G.post(game.id, 'service', req.user.id, `${req.user.display_name} is offering ${s.category.toLowerCase()}: "${s.title}" from ${G.fmt$(s.price)}.`);
-  res.json({ id });
-});
-
-app.patch('/api/services/:serviceId', auth, async (req, res) => {
-  const s = await db.get('SELECT * FROM services WHERE id = ?', int(req.params.serviceId, 'Service'));
-  if (!s) fail('Service not found', 404);
-  if (s.user_id !== req.user.id && req.user.role !== 'owner') fail('Not your service', 403);
-  const f = serviceFields(req.body, s);
-  const active = req.body.active != null ? (req.body.active ? 1 : 0) : s.active;
-  await db.run('UPDATE services SET title = ?, description = ?, category = ?, price = ?, turnaround_days = ?, active = ? WHERE id = ?', f.title, f.description, f.category, f.price, f.turnaround_days, active, s.id);
   res.json({ ok: true });
 });
 
@@ -471,7 +512,7 @@ app.post('/api/contracts/:contractId/action', auth, async (req, res) => {
 app.post('/api/games/:gameId/tracks', auth, async (req, res) => {
   const game = await gameFor(req);
   if (req.user.role !== 'player') fail('Only artists can share music', 403);
-  if (!game.uploads_open || game.status === 'archived') fail("Music uploads aren't open yet. A Record Owner will open them.");
+  if (!game.uploads_open || game.status === 'archived') fail("Music sharing isn't open yet. A Record Owner will open it.");
   const count = (await db.get('SELECT COUNT(*) AS n FROM tracks WHERE user_id = ?', req.user.id)).n;
   if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can share up to ${MAX_TRACKS_PER_PLAYER} tracks`);
   const b = req.body;
@@ -524,7 +565,8 @@ async function exportData(game, isOwner) {
   const stats = new Map((await G.playerStats(game)).map((r) => [r.player.id, r]));
   return {
     exportedAt: new Date().toISOString(),
-    game: { ...game, clock: G.clock(game) },
+    game: (({ rate_sheet, ...g }) => ({ ...g, clock: G.clock(game) }))(game),
+    rate_sheet: R.sheetFor(game),
     players: users.map((u) => {
       const s = stats.get(u.id);
       const row = {
@@ -538,7 +580,6 @@ async function exportData(game, isOwner) {
       return row;
     }),
     ledger: await db.all('SELECT * FROM ledger WHERE game_id = ? ORDER BY id', game.id),
-    services: await db.all('SELECT * FROM services WHERE game_id = ? ORDER BY id', game.id),
     contracts: await db.all('SELECT * FROM contracts WHERE game_id = ? ORDER BY id', game.id),
     contract_events: await db.all('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.id', game.id),
     feed: await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id),
@@ -562,7 +603,7 @@ app.get('/api/games/:gameId/export.zip', auth, async (req, res) => {
   res.set('Content-Disposition', `attachment; filename="${base}.zip"`);
   const zip = new ZipWriter(res);
   zip.add(`${base}/data.json`, JSON.stringify(data, null, 2));
-  for (const table of ['players', 'ledger', 'services', 'contracts', 'contract_events', 'feed', 'tracks']) {
+  for (const table of ['players', 'ledger', 'contracts', 'contract_events', 'feed', 'tracks']) {
     zip.add(`${base}/csv/${table}.csv`, toCsv(data[table]));
   }
   zip.finish();

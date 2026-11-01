@@ -1,10 +1,11 @@
 'use strict';
 const { db, tx } = require('./db');
+const { sheetFor, findItem } = require('./rates');
 
 const DAY = 86_400_000;
 const MAX_DAYS = 365;
 const MAX_PLAYERS = 30;
-const OPEN_STATUSES = ['offered', 'countered', 'review', 'active', 'delivered'];
+const OPEN_STATUSES = ['offered', 'countered', 'review', 'active', 'delivered']; // 'countered' only on deals made before the rate sheet
 const PUBLIC_STATUSES = ['active', 'delivered', 'completed'];
 
 class HttpError extends Error {
@@ -58,7 +59,7 @@ async function getGame(id) {
     const endedAt = g.started_at + g.duration_days * DAY;
     // Concurrent requests can both see 'active'; only the one that flips it posts.
     const { changes } = await db.run("UPDATE games SET status = 'showcase', ended_at = ? WHERE id = ? AND status = 'active'", endedAt, g.id);
-    if (changes) await post(g.id, 'phase', null, "That is a wrap on the season! Get your music ready: uploads to the Showcase open once a Record Owner activates them.");
+    if (changes) await post(g.id, 'phase', null, "That is a wrap on the season! Get your music ready: sharing music to the Showcase opens once a Record Owner turns it on.");
     g.status = 'showcase';
     g.ended_at = endedAt;
   }
@@ -74,8 +75,9 @@ function clock(g) {
   return { day, totalDays: g.duration_days, daysLeft, endsAt, pct: Math.min(100, (day / g.duration_days) * 100) };
 }
 
-async function balanceOf(userId) {
-  return (await db.get('SELECT COALESCE(SUM(amount), 0) AS b FROM ledger WHERE user_id = ?', userId)).b;
+/** Cash an artist has in one season (artists can be moved between seasons). */
+async function balanceOf(userId, gameId) {
+  return (await db.get('SELECT COALESCE(SUM(amount), 0) AS b FROM ledger WHERE user_id = ? AND game_id = ?', userId, gameId)).b;
 }
 
 async function ledgerEntry(gameId, userId, amount, kind, { contractId = null, memo = '', by = null } = {}) {
@@ -87,7 +89,7 @@ async function ledgerEntry(gameId, userId, amount, kind, { contractId = null, me
 
 async function payAdvance(game, userId) {
   if (game.starting_balance <= 0) return;
-  const paid = await db.get("SELECT 1 FROM ledger WHERE user_id = ? AND kind = 'advance'", userId);
+  const paid = await db.get("SELECT 1 FROM ledger WHERE user_id = ? AND game_id = ? AND kind = 'advance'", userId, game.id);
   if (!paid) await ledgerEntry(game.id, userId, game.starting_balance, 'advance', { memo: 'Signing advance from the label' });
 }
 
@@ -110,17 +112,16 @@ async function playerStats(game) {
   const gid = game.id;
   const byUser = async (sql) => new Map((await db.all(sql, gid)).map((r) => [r.k, r]));
 
-  const [players, bal, earned, granted, escrow, sold, bought, tracks, likes, services] = await Promise.all([
+  const [players, bal, earned, granted, escrow, sold, bought, tracks, likes] = await Promise.all([
     db.all("SELECT * FROM users WHERE role = 'player' AND game_id = ? ORDER BY display_name", gid),
     byUser('SELECT user_id AS k, SUM(amount) AS v FROM ledger WHERE game_id = ? AND user_id IS NOT NULL GROUP BY user_id'),
     byUser("SELECT user_id AS k, SUM(amount) AS v FROM ledger WHERE game_id = ? AND kind = 'payment' GROUP BY user_id"),
-    byUser("SELECT user_id AS k, SUM(amount) AS v FROM ledger WHERE game_id = ? AND kind IN ('advance','grant','fine') GROUP BY user_id"),
+    byUser("SELECT user_id AS k, SUM(amount) AS v FROM ledger WHERE game_id = ? AND kind IN ('advance','grant','bonus','fine') GROUP BY user_id"),
     byUser('SELECT buyer_id AS k, SUM(escrow) AS v FROM contracts WHERE game_id = ? GROUP BY buyer_id'),
     byUser("SELECT seller_id AS k, COUNT(*) AS v, AVG(rating) AS r FROM contracts WHERE game_id = ? AND status = 'completed' GROUP BY seller_id"),
     byUser("SELECT buyer_id AS k, COUNT(*) AS v, SUM(amount) AS s FROM contracts WHERE game_id = ? AND status = 'completed' GROUP BY buyer_id"),
     byUser('SELECT user_id AS k, COUNT(*) AS v, SUM(plays) AS p FROM tracks WHERE game_id = ? GROUP BY user_id'),
     byUser('SELECT t.user_id AS k, COUNT(*) AS v FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ? GROUP BY t.user_id'),
-    byUser('SELECT user_id AS k, COUNT(*) AS v FROM services WHERE game_id = ? AND active = 1 GROUP BY user_id'),
   ]);
 
   return players.map((p) => {
@@ -139,11 +140,10 @@ async function playerStats(game) {
       tracks: g(tracks),
       plays: g(tracks, 'p'),
       likes: g(likes),
-      services: g(services),
       released: !!tutorial.completedAt,
     };
     s.netWorth = s.balance + s.escrow;
-    const xp = s.dealsSold * 120 + s.dealsBought * 60 + s.tracks * 150 + s.likes * 10 + s.services * 20 +
+    const xp = s.dealsSold * 120 + s.dealsBought * 60 + s.tracks * 150 + s.likes * 10 +
       Math.floor(s.earned / 50) + (s.released ? 200 : 0);
     const badges = [];
     if (s.dealsSold + s.dealsBought >= 1) badges.push({ id: 'first-deal', name: 'First Deal', desc: 'Closed a contract' });
@@ -151,7 +151,7 @@ async function playerStats(game) {
     if (s.spent >= 5000) badges.push({ id: 'big-spender', name: 'Big Spender', desc: 'Invested $5,000+ in other artists' });
     if (game.starting_balance > 0 && s.netWorth >= game.starting_balance * 2) badges.push({ id: 'double-up', name: 'Double Up', desc: 'Doubled the signing advance' });
     if (s.rating && s.rating >= 4.5 && s.dealsSold >= 3) badges.push({ id: 'five-star', name: 'Five Star', desc: '4.5+ rating across 3+ deals' });
-    if (s.tracks >= 1) badges.push({ id: 'on-record', name: 'On the Record', desc: 'Uploaded music to the Showcase' });
+    if (s.tracks >= 1) badges.push({ id: 'on-record', name: 'On the Record', desc: 'Shared music in the Showcase' });
     if (s.likes >= 10) badges.push({ id: 'fan-favorite', name: 'Fan Favorite', desc: '10+ likes on your music' });
     if (s.released) badges.push({ id: 'released', name: 'Out Now', desc: 'Finished the Release Guide' });
     return { player: p, stats: s, progress: levelInfo(xp), badges, tutorial };
@@ -177,7 +177,7 @@ async function contractEvent(contractId, actorId, action, note = '', amount = nu
 async function setEscrow(c, target) {
   const delta = target - c.escrow;
   if (delta > 0) {
-    if ((await balanceOf(c.buyer_id)) < delta) fail(`${await nameOf(c.buyer_id)} doesn't have enough cash for this deal`);
+    if ((await balanceOf(c.buyer_id, c.game_id)) < delta) fail(`${await nameOf(c.buyer_id)} doesn't have enough cash for this deal`);
     await ledgerEntry(c.game_id, c.buyer_id, -delta, 'escrow_hold', { contractId: c.id, memo: `Escrow: ${c.title}` });
   } else if (delta < 0) {
     await ledgerEntry(c.game_id, c.buyer_id, -delta, 'escrow_refund', { contractId: c.id, memo: `Escrow returned: ${c.title}` });
@@ -194,40 +194,67 @@ async function updateContract(c, fields) {
   Object.assign(c, all);
 }
 
+/**
+ * Price a job from the season's rate sheet. `unit` pricing is the hourly/class
+ * (or per-item) rate times a quantity; `project` is the sheet's flat project rate.
+ */
+function priceJob(game, body) {
+  const sheet = sheetFor(game);
+  const j = findItem(sheet.jobs, String(body.jobId || ''));
+  if (!j || !j.active) fail('Pick a job from the rate sheet');
+  const pricing = body.pricing === 'project' ? 'project' : 'unit';
+  if (pricing === 'project') {
+    if (!j.projectRate) fail(`${j.name} has no project rate`);
+    return { job: j, pricing, quantity: null, unitRate: j.projectRate, amount: j.projectRate };
+  }
+  if (!j.unitRate) fail(`${j.name} has no ${j.unit} rate`);
+  const quantity = int(body.quantity, j.unit === 'item' ? 'Number of items' : 'Number of hours / class blocks', { min: 1, max: 100 });
+  return { job: j, pricing, quantity, unitRate: j.unitRate, amount: j.unitRate * quantity };
+}
+
 async function createContract(game, buyer, body) {
   if (game.status !== 'active') fail('Deals can only be made while the season is live');
   const seller = await db.get("SELECT * FROM users WHERE id = ? AND role = 'player' AND game_id = ? AND active = 1", int(body.sellerId, 'Artist'), game.id);
   if (!seller) fail('That artist is not on this roster');
   if (seller.id === buyer.id) fail("You can't hire yourself");
-  let service = null;
-  if (body.serviceId) {
-    service = await db.get('SELECT * FROM services WHERE id = ? AND game_id = ? AND active = 1', int(body.serviceId, 'Service'), game.id);
-    if (!service || service.user_id !== seller.id) fail('That service is no longer available');
-  }
-  const title = str(body.title || service?.title, 'Title', { min: 1, max: 100 });
+  const price = priceJob(game, body);
+  const title = str(body.title || price.job.name, 'Title', { min: 1, max: 100 });
   const terms = str(body.terms, 'Terms', { max: 2000 });
-  const amount = int(body.amount, 'Offer', { min: 1, max: 100_000_000 });
-  const dueDays = body.dueDays ? int(body.dueDays, 'Due in (days)', { min: 1, max: MAX_DAYS }) : service?.turnaround_days ?? null;
+  const dueDays = body.dueDays ? int(body.dueDays, 'Due in (days)', { min: 1, max: MAX_DAYS }) : null;
 
   return tx(async () => {
     const now = Date.now();
     const { id } = await db.run(
-      "INSERT INTO contracts (game_id, buyer_id, seller_id, service_id, title, terms, amount, due_days, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offered', ?, ?) RETURNING id",
-      game.id, buyer.id, seller.id, service?.id ?? null, title, terms, amount, dueDays, now, now
+      "INSERT INTO contracts (game_id, buyer_id, seller_id, title, terms, amount, due_days, status, job_id, pricing, quantity, unit_rate, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'offered', ?, ?, ?, ?, ?, ?) RETURNING id",
+      game.id, buyer.id, seller.id, title, terms, price.amount, dueDays, price.job.id, price.pricing, price.quantity, price.unitRate, now, now
     );
     const c = await getContract(id);
-    await setEscrow(c, amount);
+    await setEscrow(c, price.amount);
     await updateContract(c, {});
-    await contractEvent(c.id, buyer.id, 'offered', terms, amount);
+    await contractEvent(c.id, buyer.id, 'offered', terms, price.amount);
     return c.id;
   });
 }
 
+/** The rate sheet's Game Bonus: one bonus for every two different people an artist has hired. */
+async function payHireBonus(game, buyerId) {
+  const bonus = findItem(sheetFor(game).payouts, 'hire-bonus');
+  if (!bonus?.amount) return;
+  const hired = (await db.get("SELECT COUNT(DISTINCT seller_id) AS n FROM contracts WHERE game_id = ? AND buyer_id = ? AND status = 'completed'", game.id, buyerId)).n;
+  const paid = (await db.get("SELECT COUNT(*) AS n FROM ledger WHERE game_id = ? AND user_id = ? AND kind = 'bonus'", game.id, buyerId)).n;
+  for (let i = paid; i < Math.floor(hired / 2); i++) {
+    await ledgerEntry(game.id, buyerId, bonus.amount, 'bonus', { memo: `Game Bonus: hired ${(i + 1) * 2} different people` });
+    await post(game.id, 'grant', buyerId, `${await nameOf(buyerId)} has hired ${(i + 1) * 2} different labelmates and earned a ${fmt$(bonus.amount)} Game Bonus.`);
+  }
+}
+
 /**
  * State machine for contracts. Who can do what:
- *   seller: accept | decline | counter (offered), deliver (active)
- *   buyer:  accept_counter | withdraw (offered/countered), confirm | revise (delivered)
- *   owner:  approve | reject (review), cancel | complete (any open)
+ *   seller: accept | decline (offered), deliver (active)
+ *   buyer:  withdraw (offered), confirm | revise (delivered)
+ *   owner:  approve | reject (review), cancel | complete (any open),
+ *           late_fee (charge the artist the sheet's late fee), undone (fine the artist, refund the buyer)
+ * Prices come from the rate sheet, so there are no counter offers.
  */
 async function contractAction(user, contractId, body) {
   const action = String(body.action || '');
@@ -252,19 +279,6 @@ async function contractAction(user, contractId, body) {
         need(isSeller && ['offered', 'countered'].includes(c.status));
         await setEscrow(c, 0);
         await updateContract(c, { status: 'declined' });
-        break;
-      case 'counter': {
-        need(isSeller && c.status === 'offered'); needLive();
-        const amount = int(body.amount, 'Counter offer', { min: 1, max: 100_000_000 });
-        if (amount === c.amount) fail('A counter offer needs a different amount');
-        await updateContract(c, { status: 'countered', amount });
-        await contractEvent(c.id, user.id, action, note, amount);
-        return c.id;
-      }
-      case 'accept_counter':
-        need(isBuyer && c.status === 'countered'); needLive();
-        await setEscrow(c, c.amount);
-        await updateContract(c, { status: 'review' });
         break;
       case 'withdraw':
         need(isBuyer && ['offered', 'countered'].includes(c.status));
@@ -302,6 +316,25 @@ async function contractAction(user, contractId, body) {
         await updateContract(c, { status: 'completed', completed_at: Date.now(), rating });
         await post(c.game_id, 'paid', c.seller_id, `${sellerName} delivered "${c.title}" for ${buyerName}. ${fmt$(paid - fee)} paid out${rating ? `, rated ${rating}/5` : ''}.`);
         await contractEvent(c.id, user.id, action, note, paid);
+        await payHireBonus(game, c.buyer_id);
+        return c.id;
+      }
+      // The rate sheet's late fee: the artist pays it, the client who hired them doesn't.
+      case 'late_fee': {
+        need(isOwner && ['active', 'delivered', 'completed'].includes(c.status));
+        const fine = findItem(sheetFor(game).fines, 'late-incomplete');
+        await ledgerEntry(c.game_id, c.seller_id, -fine.amount, 'fine', { contractId: c.id, memo: `${fine.name}: ${c.title}`, by: user.id });
+        await contractEvent(c.id, user.id, action, note, fine.amount);
+        return c.id;
+      }
+      // Work never done: fine the artist and give the client their money back.
+      case 'undone': {
+        need(isOwner && ['active', 'delivered'].includes(c.status));
+        const fine = findItem(sheetFor(game).fines, 'undone');
+        await ledgerEntry(c.game_id, c.seller_id, -fine.amount, 'fine', { contractId: c.id, memo: `${fine.name}: ${c.title}`, by: user.id });
+        await setEscrow(c, 0);
+        await updateContract(c, { status: 'cancelled' });
+        await contractEvent(c.id, user.id, action, note, fine.amount);
         return c.id;
       }
       case 'cancel':
@@ -321,5 +354,5 @@ module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
   HttpError, fail, str, int, httpUrl, isPin, isUsername,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
-  createContract, contractAction, nameOf, fmt$,
+  createContract, contractAction, nameOf, fmt$, sheetFor,
 };
