@@ -60,6 +60,26 @@ Owner exports have everything, including PINs. A player's export has what the ap
 
 All data lives in the Neon database, not on the Render server (Render's free disk is wiped on every restart anyway). Neon's free plan has 0.5 GB of storage; a 30-artist season uses well under 1 MB, so offloading is about a clean slate rather than space.
 
+## Privacy: only the data the game needs
+
+Shown in the app under **Privacy** on the sign-in screen and the Data page. The server stores:
+- usernames (set by owners) and the artist name, role, bio and color players choose;
+- PINs, readable by owners so they can help students who forget;
+- game activity: ledger, contracts and their notes, ratings, lobby messages, Release Guide progress, Showcase links, likes and listens;
+- last-seen time (for the online dot) and a sign-in session cookie (30 days).
+
+It does **not** collect email, phone, address, birthday, photos or location. It has no analytics, ads or tracking, and loads nothing from other sites: the fonts are self-hosted in `public/fonts` (SIL Open Font License). It writes no request or IP logs of its own; Render and Neon keep their usual platform logs. A season's data is deleted when owners offload it. Owners should pick usernames that aren't students' full names.
+
+## Staying inside the free plans
+
+Neon's free plan has 1 GB of storage, 100 compute-hours and 5 GB of data transfer a month. Data transfer is the one that matters: every open browser keeps the label up to date.
+- Browsers call `GET /api/rev` every 10 s (about 1 KB from the database) and only reload the state when it changes, or every 5 minutes.
+- Refreshing stops on hidden tabs and after 10 minutes without input, so the database can sleep.
+- `src/statecache.js` keeps one in-memory copy of each season. After a change it reads only new or changed rows (the ledger, contract events and feed are append-only; contracts have `updated_at`), so 30 students reloading cost about the same as one.
+- Responses are gzip-compressed.
+
+Measured on a busy late-season class (30 students, 300 deals): a full refresh used to read about 260 KB from the database. Now one change plus all 30 students reloading reads about 120 KB in total. That's roughly 40 MB per busy class-hour, or about 2 GB a month at two hours a day.
+
 ## Configuration
 
 | Env var | Default | |
@@ -100,6 +120,7 @@ src/game.js       Game rules: money, escrow, contract state machine, XP, phases
 src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export
 src/backup.js     Printable PDF backup of the class records
+src/statecache.js Shared, incrementally refreshed season state (keeps database traffic low)
 src/rates.js      The class rate sheet (jobs, payouts, fees and fines)
 public/           Single-page client (no build step)
   app.js          UI and routing

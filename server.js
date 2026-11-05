@@ -6,6 +6,8 @@ const { db, tx, migrate } = require('./src/db');
 const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const { writeBackupPdf } = require('./src/backup');
+const SC = require('./src/statecache');
+const compression = require('compression');
 const G = require('./src/game');
 const R = require('./src/rates');
 const { fail, str, int } = G;
@@ -24,6 +26,19 @@ app.disable('x-powered-by');
 // migrate() has reached Postgres, so a bad DATABASE_URL still fails the deploy.
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.use(express.json({ limit: '200kb' }));
+app.use(compression());
+
+// Any successful write moves the revision, so browsers know to reload. It's
+// bumped just before the response goes out, so the writer's own reload sees it.
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const json = res.json.bind(res);
+    res.json = (body) => { if (res.statusCode < 400) SC.bump(); return json(body); };
+  }
+  next();
+});
+G.hooks.onChange = SC.bump;
+
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'same-origin');
@@ -428,68 +443,56 @@ app.put('/api/games/:gameId/rates', auth, ownerOnly, async (req, res) => {
 });
 
 // ---------- full game state ----------
+// Built from the shared season cache (src/statecache.js), so a classroom of
+// browsers refreshing every few seconds doesn't re-read the season each time.
+app.get('/api/rev', auth, (req, res) => res.json({ rev: SC.rev() }));
+
 app.get('/api/games/:gameId/state', auth, async (req, res) => {
   const game = await gameFor(req);
   const isOwner = req.user.role === 'owner';
   const me = req.user;
+  const rev = SC.rev();
+  const e = await SC.entryFor(game);
 
-  const roster = (await G.playerStats(game)).map((r) => ({
+  const roster = e.stats.map((r) => ({
     ...publicUser(r.player, { withPin: isOwner }), stats: r.stats, progress: r.progress, badges: r.badges,
     tutorial: r.player.id === me.id || isOwner ? r.tutorial : undefined,
   }));
 
-  const pub = G.PUBLIC_STATUSES.map((s) => `'${s}'`).join(',');
-  const contracts = (isOwner
-    ? await db.all('SELECT * FROM contracts WHERE game_id = ? ORDER BY updated_at DESC', game.id)
-    : await db.all(`SELECT * FROM contracts WHERE game_id = ? AND (buyer_id = ? OR seller_id = ? OR status IN (${pub})) ORDER BY updated_at DESC`, game.id, me.id, me.id)
-  );
-  // One query for every event on the label instead of one per contract.
-  const events = new Map();
-  for (const e of await db.all('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.created_at, e.id', game.id)) {
-    if (!events.has(e.contract_id)) events.set(e.contract_id, []);
-    events.get(e.contract_id).push(e);
-  }
-  const contractsOut = contracts.map((c) => {
-    const party = isOwner || c.buyer_id === me.id || c.seller_id === me.id;
-    return {
-      id: c.id, buyerId: c.buyer_id, sellerId: c.seller_id, title: c.title,
-      jobId: c.job_id, pricing: c.pricing, quantity: c.quantity, unitRate: c.unit_rate,
-      terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
-      rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
-      events: party ? (events.get(c.id) || []).map((e) => ({ actorId: e.actor_id, action: e.action, note: e.note, amount: e.amount, at: e.created_at })) : [],
-    };
-  });
+  const pub = new Set(G.PUBLIC_STATUSES);
+  const contractsOut = [...e.contracts.values()]
+    .filter((c) => isOwner || c.buyer_id === me.id || c.seller_id === me.id || pub.has(c.status))
+    .sort((a, b) => b.updated_at - a.updated_at || b.id - a.id)
+    .map((c) => {
+      const party = isOwner || c.buyer_id === me.id || c.seller_id === me.id;
+      return {
+        id: c.id, buyerId: c.buyer_id, sellerId: c.seller_id, title: c.title,
+        jobId: c.job_id, pricing: c.pricing, quantity: c.quantity, unitRate: c.unit_rate,
+        terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
+        rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
+        events: party ? (e.events.get(c.id) || []).map((x) => ({ actorId: x.actor_id, action: x.action, note: x.note, amount: x.amount, at: x.created_at })) : [],
+      };
+    });
 
-  const feed = (await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY created_at DESC, id DESC LIMIT 150', game.id))
+  const feed = [...e.feed.values()].sort((a, b) => b.created_at - a.created_at || b.id - a.id).slice(0, 150)
     .map((f) => ({ id: f.id, kind: f.kind, actorId: f.actor_id, message: f.message, at: f.created_at }));
 
-  const myLikes = new Set((await db.all('SELECT track_id FROM track_likes WHERE user_id = ?', me.id)).map((r) => r.track_id));
-  const tracks = (await db.all(
-    'SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY created_at DESC',
-    game.id
-  )).map((t) => ({
+  const myLikes = new Set(e.likes.filter((l) => l.user_id === me.id).map((l) => l.track_id));
+  const tracks = e.tracks.map((t) => ({
     id: t.id, userId: t.user_id, title: t.title, genre: t.genre, description: t.description, credits: t.credits,
     url: t.url, plays: t.plays, likes: t.likes, liked: myLikes.has(t.id), createdAt: t.created_at,
   }));
 
-  const ledgerRows = isOwner
-    ? await db.all('SELECT * FROM ledger WHERE game_id = ? ORDER BY id DESC LIMIT 500', game.id)
-    : await db.all('SELECT * FROM ledger WHERE game_id = ? AND user_id = ? ORDER BY id DESC LIMIT 300', game.id, me.id);
-  const vault = (await db.get('SELECT COALESCE(SUM(amount), 0) AS v FROM ledger WHERE game_id = ? AND user_id IS NULL', game.id)).v;
-  const owners = (await db.all("SELECT id, display_name, color FROM users WHERE role = 'owner'"))
-    .map((o) => ({ id: o.id, displayName: o.display_name, color: o.color }));
-  // Artists who were moved to another season still appear in this season's records by name.
-  const former = (await db.all(
-    `SELECT id, display_name, color FROM users WHERE role = 'player' AND game_id IS DISTINCT FROM ? AND id IN (
-       SELECT user_id FROM ledger WHERE game_id = ? UNION SELECT buyer_id FROM contracts WHERE game_id = ? UNION SELECT seller_id FROM contracts WHERE game_id = ?)`,
-    game.id, game.id, game.id, game.id
-  )).map((u) => ({ id: u.id, displayName: u.display_name, color: u.color, former: true }));
+  const ledgerAll = [...e.ledger.values()].sort((a, b) => b.id - a.id);
+  const ledgerRows = isOwner ? ledgerAll.slice(0, 500) : ledgerAll.filter((l) => l.user_id === me.id).slice(0, 300);
+  const vault = ledgerAll.reduce((a, l) => (l.user_id == null ? a + l.amount : a), 0);
 
-  const { rate_sheet, ...gameOut } = game;
+  const { rate_sheet, summary, ...gameOut } = game;
   res.json({
+    rev,
     game: { ...gameOut, clock: G.clock(game) },
     rates: R.sheetFor(game),
-    roster, owners, former, contracts: contractsOut, feed, tracks, vault,
+    roster, owners: e.owners, former: e.former, contracts: contractsOut, feed, tracks, vault,
     ledger: ledgerRows.map((l) => ({ id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at })),
     serverTime: Date.now(),
   });
@@ -706,6 +709,7 @@ app.post('/api/games/:gameId/offload', auth, ownerOnly, async (req, res) => {
     await db.run("UPDATE games SET status = 'offloaded', uploads_open = 0, offloaded_at = ?, summary = ? WHERE id = ?", Date.now(), JSON.stringify(summary), game.id);
     return gone.changes;
   });
+  SC.drop(game.id);
   res.json({ ok: true, artistsRemoved: freed });
 });
 
