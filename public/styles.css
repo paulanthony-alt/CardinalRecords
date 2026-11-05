@@ -1,6 +1,15 @@
 /* ============ Cardinal Records: "Label desk" (design direction A) ============
    A 1996 label-office desktop: chrome windows with cardinal title bars on a
    maroon desktop, bevelled controls, Libre Franklin + Courier Prime. */
+/* Fonts are served from this site (no Google Fonts), so students' browsers only talk to Cardinal Records. SIL Open Font License, see /fonts. */
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/libre-franklin-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/libre-franklin-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/libre-franklin-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/libre-franklin-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 800; font-display: swap; src: url('/fonts/libre-franklin-latin-800-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Libre Franklin'; font-style: normal; font-weight: 900; font-display: swap; src: url('/fonts/libre-franklin-latin-900-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Courier Prime'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/courier-prime-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Courier Prime'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/courier-prime-latin-700-normal.woff2') format('woff2'); }
 :root {
   --red: #a8132b;
   --redd: #6f0c1d;
@@ -586,3 +595,11 @@ table.t tr.off td { color: var(--lo); }
   .banner .actions { margin-left: 0; }
   .page-head .actions { margin-left: 0; }
 }
+
+/* privacy notice */
+.privacy h4 { margin: 14px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--red); }
+.privacy h4:first-child { margin-top: 4px; }
+.privacy ul { margin: 0 0 4px 18px; padding: 0; line-height: 1.55; font-size: 13.5px; }
+.privacy li { margin: 2px 0; }
+.linkbtn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 0; padding: 0; font: inherit; color: var(--blue); text-decoration: underline; cursor: pointer; }
+.linkbtn svg { width: 13px; height: 13px; }

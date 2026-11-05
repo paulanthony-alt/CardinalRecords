@@ -130,6 +130,9 @@ async function loadState() {
   if (!S.gameId) { S.state = null; S.stateKey = ''; return; }
   const st = await api('GET', `/api/games/${S.gameId}/state`);
   delete st.serverTime;
+  S.rev = st.rev;
+  delete st.rev;
+  S.loadedAt = Date.now();
   S.state = st;
   S.stateKey = JSON.stringify(st);
   checkLevelUp();
@@ -286,6 +289,42 @@ function contractCard(c) {
 }
 
 // ============================================================ login
+// ============================================================ privacy
+// Keep this in step with what the server actually stores (see README: Privacy).
+function privacyModal() {
+  modal(`${modalHead('Privacy: only what the game needs', 'Cardinal Records collects the minimum it needs to run the class game, and nothing else.')}
+    <div class="privacy">
+      <h4>What we keep</h4>
+      <ul>
+        <li>Your <b>username</b> (set by your Record Owner) and the <b>artist name, role, bio and color</b> you choose.</li>
+        <li>Your <b>PIN</b>, so you can sign in. Record Owners can look it up if you forget it, so don't reuse a PIN from anywhere else.</li>
+        <li><b>What you do in the game:</b> your label money, deals and ratings, lobby messages, Release Guide progress and the music links you share.</li>
+        <li>When you were <b>last online</b>, for the online dot.</li>
+        <li>One <b>sign-in cookie</b> that keeps you signed in on this device for up to 30 days. No other cookies.</li>
+      </ul>
+      <h4>What we don't collect</h4>
+      <ul>
+        <li>No email, phone number, address, birthday, photo or location.</li>
+        <li>No ads, analytics or tracking, and nothing is sold or shared. The site loads nothing from other companies.</li>
+        <li>Music links open on the streaming site (Spotify, SoundCloud…), which has its own privacy policy.</li>
+      </ul>
+      <h4>Who can see it</h4>
+      <ul>
+        <li><b>Record Owners</b> (your teachers) can see everything, including PINs.</li>
+        <li><b>Other artists</b> on your label see your public profile, balance and chart rank, approved deals, the lobby and the Showcase.</li>
+        <li>Your <b>fines, transactions and private deal details</b> stay between you, the other artist on that deal, and the Record Owners.</li>
+      </ul>
+      <h4>How long we keep it</h4>
+      <ul>
+        <li>You can download your data any time from Data.</li>
+        <li>At the end of the season, Record Owners save a backup of the class records and then <b>offload</b> the season, which deletes it from the server.</li>
+        <li>The site runs on Render (website) and Neon (database) in the US. Like any web host, they keep short-term technical logs, such as IP addresses, to run their services.</li>
+      </ul>
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-act="close-modal">Got it</button></div>`);
+}
+const privacyLink = (cls = 'hint', style = '') => `<p class="${cls}"${style ? ` style="${style}"` : ''}><button type="button" class="linkbtn" data-act="privacy">${icon('lock')}Privacy: we only collect what the game needs</button></p>`;
+
 function loginView() {
   const L = S.login;
   let card;
@@ -296,7 +335,8 @@ function loginView() {
         <label class="field"><span>Username</span><input name="username" value="${esc(L.username)}" autocapitalize="off" spellcheck="false" placeholder="e.g. lil.cardinal" required /></label>
         <button class="btn primary lg block">Continue</button>
       </form>
-      <p class="hint">No account? Ask a Record Owner to sign you to the label.</p>`;
+      <p class="hint">No account? Ask a Record Owner to sign you to the label.</p>
+      ${privacyLink()}`;
   } else {
     const titles = { pin: ['Enter your PIN', 'Welcome back to the label.'], claim1: ['Create your PIN', 'First time here! Pick a 4 to 6 digit PIN. Your Record Owner can look it up if you forget.'], claim2: ['Confirm your PIN', 'Type the same PIN one more time.'] };
     const [t, sub] = titles[L.step];
@@ -308,7 +348,8 @@ function loginView() {
       <div class="pin-dots" id="pin-dots">${[0, 1, 2, 3, 4, 5].map((i) => `<span class="${i < L.pin.length ? 'on' : ''} ${i >= 4 ? 'opt' : ''}"></span>`).join('')}</div>
       <div class="pin-err">${esc(L.error)}</div>
       <div class="keypad">${keys.map((k) => `<button type="button" class="${k === 'ok' ? 'ok' : k === 'del' ? 'del' : ''}" data-act="pin-key" data-k="${k}" aria-label="${k === 'ok' ? 'Submit' : k === 'del' ? 'Delete' : k}">${k === 'ok' ? icon('check') : k === 'del' ? 'Delete' : k}</button>`).join('')}</div>
-      <p class="hint">You can also type on your keyboard.</p>`;
+      <p class="hint">You can also type on your keyboard.</p>
+      ${privacyLink()}`;
   }
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   return `<div class="login">
@@ -901,6 +942,7 @@ function dataView() {
       <div class="export-card">${icon('download')}<b>Full archive (.zip)</b><p>All data as JSON and spreadsheet-ready CSVs, including every Showcase track and its link.</p><a class="btn primary" href="/api/games/${g.id}/export.zip" download>Download ZIP</a></div>
       <div class="export-card">${icon('chart')}<b>Raw JSON</b><p>One file with the complete season data, for developers or backups.</p><a class="btn" href="/api/games/${g.id}/export.json" download>Download JSON</a></div>
     </div>
+    ${privacyLink('dim', 'margin-top:12px;font-size:12.5px')}
     <p class="dim" style="margin-top:12px;font-size:12.5px">${isOwner() ? 'Owner exports include player PINs. Store them securely. For a printable PDF of the class records, use <a href="#/admin/backups">Admin → Backups &amp; offload</a>.' : "Your download has the label's public records plus your own transactions and deals. Other artists' fees and private deal details aren't included."}</p>
     <div class="card" style="margin-top:16px"><div class="card-head"><h3>${icon('dollar')}${isOwner() ? 'Label ledger' : 'Your transactions'}</h3><span class="more">${ledger.length} ${ledger.length === 1 ? 'entry' : 'entries'}</span></div>
       ${ledger.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>When</th>${isOwner() ? '<th>Account</th>' : ''}<th>Type</th><th>Memo</th><th class="r">Amount</th></tr></thead><tbody>
@@ -1295,6 +1337,7 @@ const ACTIONS = {
   nav: (el) => { location.hash = el.dataset.to; },
   'modal-bg': (el, e) => { if (e.target === el) closeModal(); },
   'close-modal': closeModal,
+  privacy: privacyModal,
   'confirm-ok': async () => { const fn = S._confirm; closeModal(); if (fn) await fn(); },
   'login-back': () => { S.login = freshLogin(); render(); },
   'pin-key': (el) => pinKey(el.dataset.k),
@@ -1563,15 +1606,33 @@ document.addEventListener('keydown', (e) => {
 
 window.addEventListener('hashchange', () => { S.ui.adminOpen = false; closeModal(); render(); window.scrollTo(0, 0); });
 
-// Keep everyone in sync: re-fetch the label state every 10s, without clobbering
-// an open modal or a form someone is typing in.
-setInterval(async () => {
+// Keep everyone in sync without wearing out the free database plan: every 10s ask
+// the server whether anything changed (a tiny request) and only then reload the
+// label. Pause when the tab is hidden or nobody has touched it for 10 minutes.
+const IDLE_MS = 10 * 60_000;
+let lastActivity = Date.now();
+let wasIdle = false;
+const markActive = () => {
+  lastActivity = Date.now();
+  if (wasIdle) { wasIdle = false; syncState(); }
+};
+for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll']) window.addEventListener(ev, markActive, { passive: true, capture: true });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) syncState(); });
+
+async function syncState() {
   if (!S.user || !S.gameId || document.hidden) return;
+  if (Date.now() - lastActivity > IDLE_MS) { wasIdle = true; return; }
+  try {
+    const { rev } = await api('GET', '/api/rev');
+    // Reload when something changed, and every 5 minutes anyway (clock, online dots).
+    if (rev === S.rev && Date.now() - (S.loadedAt || 0) < 5 * 60_000) return;
+  } catch { return; }
   const before = S.stateKey;
   try { await loadState(); } catch { return; }
   const typing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.activeElement.dataset.input;
   if (S.stateKey !== before && !modalOpen() && !typing) render();
-}, 10_000);
+}
+setInterval(syncState, 10_000);
 
 setInterval(() => { const c = $('#clock'); if (c) c.textContent = clockText(); }, 20_000);
 

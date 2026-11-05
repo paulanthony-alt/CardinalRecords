@@ -43,6 +43,9 @@ function httpUrl(v, name) {
 const isPin = (p) => /^\d{4,6}$/.test(String(p ?? ''));
 const isUsername = (u) => /^[a-zA-Z0-9_.-]{3,24}$/.test(String(u ?? ''));
 
+// Set by the server: called when a read request changes data (the season clock running out).
+const hooks = { onChange: () => {} };
+
 // ---------- feed ----------
 async function post(gameId, kind, actorId, message) {
   await db.run('INSERT INTO feed (game_id, kind, actor_id, message, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -59,6 +62,7 @@ async function getGame(id) {
     const endedAt = g.started_at + g.duration_days * DAY;
     // Concurrent requests can both see 'active'; only the one that flips it posts.
     const { changes } = await db.run("UPDATE games SET status = 'showcase', ended_at = ? WHERE id = ? AND status = 'active'", endedAt, g.id);
+    if (changes) hooks.onChange();
     if (changes) await post(g.id, 'phase', null, "That is a wrap on the season! Get your music ready: sharing music to the Showcase opens once a Record Owner turns it on.");
     g.status = 'showcase';
     g.ended_at = endedAt;
@@ -354,7 +358,7 @@ async function contractAction(user, contractId, body) {
 
 module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
-  HttpError, fail, str, int, httpUrl, isPin, isUsername,
+  hooks, HttpError, fail, str, int, httpUrl, isPin, isUsername,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
   createContract, contractAction, nameOf, fmt$, sheetFor,
 };
