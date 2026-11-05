@@ -1725,17 +1725,29 @@ for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll']) wi
 document.addEventListener('visibilitychange', () => { if (!document.hidden) syncState(); });
 
 async function syncState() {
-  if (!S.user || !S.gameId || document.hidden) return;
+  if (!S.user || document.hidden) return;
+  if (!S.gameId && !isOwner()) return;
   if (Date.now() - lastActivity > IDLE_MS) { wasIdle = true; return; }
+  let rev;
   try {
-    const { rev } = await api('GET', '/api/rev');
+    ({ rev } = await api('GET', '/api/rev'));
     // Reload when something changed, and every 5 minutes anyway (clock, online dots).
     if (rev === S.rev && Date.now() - (S.loadedAt || 0) < 5 * 60_000) return;
   } catch { return; }
   const before = S.stateKey;
-  try { await loadState(); } catch { return; }
+  const beforeGames = JSON.stringify(S.games.map((g) => [g.id, g.status, g.name]));
+  try {
+    // Owners: another owner may have created, deleted or offloaded a season.
+    if (isOwner()) await loadMe();
+    await loadState();
+  } catch {
+    // The open season is gone (deleted or offloaded elsewhere): switch to another.
+    try { await loadMe(); await loadState(); } catch { return; }
+  }
+  if (!S.gameId) S.rev = rev; // with a season open, loadState already stored the newer revision
+  const gamesChanged = JSON.stringify(S.games.map((g) => [g.id, g.status, g.name])) !== beforeGames;
   const typing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && !document.activeElement.dataset.input;
-  if (S.stateKey !== before && !modalOpen() && !typing) render();
+  if ((S.stateKey !== before || gamesChanged) && !modalOpen() && !typing) render();
 }
 setInterval(syncState, 10_000);
 
