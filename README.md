@@ -43,6 +43,8 @@ The game side includes XP and levels (Intern → Legend), badges, the Cardinal C
 
 Each artist an owner signs gets a one-time **sign-up code**, shown next to them in Admin → Roster & PINs. Use **Print sign-up slips** to print a cut-out slip per student with the site, their username and code. On first sign-in the student types their username, then the code, then picks their own PIN. Without the code, a classmate who knows the username can't claim the account first. Codes are 6 characters with no look-alikes (0/O, 1/I/L); case, spaces and dashes don't matter. They work once and lock out after 5 wrong tries. **Reset PIN** issues a new code.
 
+Owners see a **Sign-up day steps** checklist at the top of Roster & PINs. It shows live progress (how many students have signed in, which steps are done) and troubleshooting tips. It folds away once everyone's in, and students never see it.
+
 A season that was **never started** (a test, or a mistake) can be deleted from All seasons or Season settings by typing its name. This removes its signed artists and frees their usernames. Seasons that have been played go through archive, backup and offload instead.
 
 ## Data export

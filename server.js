@@ -114,7 +114,7 @@ function codeMatches(user, given) {
 const attempts = new Map();
 function checkLock(key) {
   const a = attempts.get(key);
-  if (a && a.until > Date.now()) fail(`Too many wrong PINs. Try again in ${Math.ceil((a.until - Date.now()) / 60000)} min.`, 429);
+  if (a && a.until > Date.now()) fail(`Too many wrong tries. Try again in ${Math.ceil((a.until - Date.now()) / 60000)} min.`, 429);
 }
 function recordFail(key) {
   const a = attempts.get(key) || { n: 0, until: 0 };

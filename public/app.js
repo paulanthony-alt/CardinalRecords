@@ -1032,7 +1032,7 @@ function adminView(tab) {
   } else if (t === 'roster') {
     const r = st.roster;
     const full = activeRoster().length >= st.game.max_players;
-    body = `<div class="card"><div class="card-head"><h3>${icon('plus')}Sign an artist</h3><span class="more">${activeRoster().length} / ${st.game.max_players} spots used</span></div>
+    body = `${archived ? '' : signupGuide(st)}<div class="card"><div class="card-head"><h3>${icon('plus')}Sign an artist</h3><span class="more">${activeRoster().length} / ${st.game.max_players} spots used</span></div>
       ${archived ? '<p class="muted">This season is archived.</p>' : `<form data-form="add-player"><div class="row">
         <label class="field"><span>Username</span><input name="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_.\\-]{3,24}" autocapitalize="off" placeholder="lil.cardinal" ${full ? 'disabled' : ''} /><small>They sign in with this. Letters, numbers, . _ -</small></label>
         <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" placeholder="Lil Cardinal" ${full ? 'disabled' : ''} /></label>
@@ -1114,6 +1114,44 @@ function adminView(tab) {
   return `${pageHead('Record Owner · Admin', label, st && !NO_SEASON_TABS.includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
     <div class="tabs">${ADMIN_TABS.filter(([k]) => st || NO_SEASON_TABS.includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
+}
+
+/** Owners only: the sign-up day checklist, with live progress for this season. */
+function signupGuide(st) {
+  const r = activeRoster();
+  const claimed = r.filter((p) => p.claimed).length;
+  const waiting = r.length - claimed;
+  const g = st.game;
+  const closed = store.get('cr.signupGuide') === 'closed' && waiting === 0 && r.length > 0;
+  const done = (ok) => `<span class="step-mark ${ok ? 'ok' : ''}" aria-hidden="true">${ok ? icon('check') : ''}</span>`;
+  const startingPin = !!S.user?.startingPin;
+  return `<details class="card signup-guide" data-guide="signup" ${closed ? '' : 'open'}>
+    <summary class="card-head"><h3>${icon('bulb')}Sign-up day steps</h3><span class="more">${r.length ? `${claimed} of ${plural(r.length, 'artist')} signed in` : 'No artists yet'}</span></summary>
+    <p class="muted" style="margin-top:-4px">Only Record Owners see this. Follow it top to bottom the first time a class joins.</p>
+    ${r.length ? `<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="${r.length}" aria-valuenow="${claimed}"><span style="width:${(claimed / r.length) * 100}%"></span></div>` : ''}
+    <ol class="steps">
+      <li>${done(!startingPin)}<div><b>Before class</b>
+        <p>Open the site 2–3 minutes early: the free server sleeps and takes up to a minute to wake. ${startingPin ? '<b class="red">You are still using your starting PIN:</b> <a href="#/profile">change it</a> (6 digits is best).' : 'Your owner PIN has been changed.'} Delete any test seasons that never started in <a href="#/admin/seasons">All seasons</a>.</p></div></li>
+      <li>${done(r.length > 0)}<div><b>Sign each student</b>
+        <p>Use the <b>Sign an artist</b> form below. Pick usernames that aren't full names, like <span class="mono">jsmith27</span> or a stage name. Artist name and role are optional; students can change them later.</p></div></li>
+      <li>${done(waiting === 0 && r.length > 0)}<div><b>Hand out sign-up codes</b>
+        <p>Click <b>Print sign-up slips</b> on the roster below. There's one cut-out slip per student, with the site, their username and their one-time code. Or read each code from the PIN column.</p></div></li>
+      <li>${done(waiting === 0 && r.length > 0)}<div><b>Students sign in</b>
+        <p>They go to <b class="mono">${esc(location.host)}</b>, type their <b>username</b>, then their <b>sign-up code</b>, then pick a <b>4–6 digit PIN</b> and type it again. "Unclaimed" disappears from the roster once they're in.${waiting && r.length ? ` <b>${plural(waiting, 'student')} still to go.</b>` : ''}</p></div></li>
+      <li>${done(g.status !== 'setup')}<div><b>Start the season</b>
+        <p>When everyone's in, go to <a href="#/admin/season">Season settings</a> and click <b>Start the season</b>. That pays each artist the ${money(g.starting_balance)} advance. Students signed later get it straight away.</p></div></li>
+      <li>${done(false)}<div><b>Before they leave</b>
+        <p>On shared computers, students should click <b>Sign out</b>, because sign-ins last 30 days. After sign-up, download a first backup in <a href="#/admin/backups">Backups &amp; offload</a>.</p></div></li>
+    </ol>
+    <div class="trouble"><b>${icon('shield')}If something goes wrong</b>
+      <ul>
+        <li><b>"That sign-up code isn't right":</b> compare it with the code on the roster. Codes never use 0, O, 1, I or L, so there's nothing to mix up. Case, spaces and dashes don't matter.</li>
+        <li><b>"Too many wrong tries":</b> 5 wrong PINs or codes lock that username for 5 minutes. Wait, then try again.</li>
+        <li><b>Lost slip:</b> the code is in the PIN column below.</li>
+        <li><b>Forgot their PIN, or someone else got into their account:</b> click <b>Reset PIN</b>. It signs them out everywhere and gives a new code.</li>
+        <li><b>Wrong season:</b> click <b>Edit</b> and change the Season (only before they have open deals).</li>
+      </ul></div>
+  </details>`;
 }
 
 /** Owners: printable PDF backups of every season, and offloading a finished season. */
@@ -1650,6 +1688,11 @@ document.addEventListener('change', async (e) => {
     $$('#stars label').forEach((l, i) => l.classList.toggle('on', i < v));
   }
 });
+
+// Remember whether an owner folded away the sign-up steps (they reopen while students are still unclaimed).
+document.addEventListener('toggle', (e) => {
+  if (e.target.dataset?.guide === 'signup') store.set('cr.signupGuide', e.target.open ? 'open' : 'closed');
+}, true);
 
 document.addEventListener('input', (e) => {
   if (e.target.dataset.inputCalc) hireCalc();
