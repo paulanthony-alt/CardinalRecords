@@ -189,12 +189,12 @@ async function writeBackupPdf(out, games, opts = {}) {
     doc.font('Helvetica-Bold').fontSize(10.5).fillColor(INK).text('Roster and balances');
     doc.moveDown(0.3);
     const rosterCols = [
-      { h: 'Artist', w: 20, bold: true }, { h: 'Username', w: 14 }, ...(opts.pins ? [{ h: 'PIN', w: 7 }] : []), { h: 'Role', w: 10 },
+      { h: 'Artist', w: 20, bold: true }, { h: 'Username', w: 14 }, ...(opts.pins ? [{ h: 'PIN / code', w: 10 }] : []), { h: 'Role', w: 10 },
       { h: 'Cash', w: 10, align: 'right', color: negRed }, { h: 'Escrow', w: 9, align: 'right' }, { h: 'Net worth', w: 10, align: 'right', color: negRed },
       { h: 'Earned', w: 9, align: 'right' }, { h: 'Fines', w: 8, align: 'right' }, { h: 'Sold/Bought', w: 13, align: 'right' }, { h: 'Level', w: 6, align: 'right' },
     ];
     table(rosterCols, s.stats.map((r) => [
-      `${r.player.display_name}${r.player.active ? '' : ' (removed)'}`, `@${r.player.username}`, ...(opts.pins ? [r.player.pin ?? 'unclaimed'] : []), r.player.role_title,
+      `${r.player.display_name}${r.player.active ? '' : ' (removed)'}`, `@${r.player.username}`, ...(opts.pins ? [r.player.pin ?? (r.player.claim_code ? `code ${r.player.claim_code.slice(0, 3)}-${r.player.claim_code.slice(3)}` : 'unclaimed')] : []), r.player.role_title,
       money(r.stats.balance), money(r.stats.escrow), money(r.stats.netWorth), money(r.stats.earned), money(s.fines.get(r.player.id) || 0),
       `${r.stats.dealsSold}/${r.stats.dealsBought}`, String(r.progress.level),
     ]), g.name);

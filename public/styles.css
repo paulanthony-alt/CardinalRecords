@@ -603,3 +603,8 @@ table.t tr.off td { color: var(--lo); }
 .privacy li { margin: 2px 0; }
 .linkbtn { display: inline-flex; align-items: center; gap: 5px; background: none; border: 0; padding: 0; font: inherit; color: var(--blue); text-decoration: underline; cursor: pointer; }
 .linkbtn svg { width: 13px; height: 13px; }
+
+/* sign-up codes */
+.code-chip { display: inline-block; padding: 1px 6px; border: 1px solid var(--lo); background: var(--note); font-weight: 700; letter-spacing: .05em; font-size: 12.5px; }
+.code-in { text-transform: uppercase; letter-spacing: .12em; font-size: 18px !important; text-align: center; }
+.code-big { font-size: 34px; font-weight: 700; letter-spacing: .12em; text-align: center; padding: 18px; margin: 8px 0; background: var(--note); border: 1px dashed var(--lo); }

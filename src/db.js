@@ -155,6 +155,10 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 
 -- Backups and end-of-season offload. status can also be 'offloaded': the season's
 -- records were deleted after a backup, leaving this row and a small JSON summary.
+-- One-time sign-up code a new artist needs (with their username) to pick their PIN.
+-- Cleared once they've claimed the account; a PIN reset issues a new one.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS claim_code TEXT;
+
 ALTER TABLE games ADD COLUMN IF NOT EXISTS archived_at BIGINT,
   ADD COLUMN IF NOT EXISTS backed_up_at BIGINT,
   ADD COLUMN IF NOT EXISTS offloaded_at BIGINT,
