@@ -76,7 +76,9 @@ const S = {
   login: freshLogin(),
   ui: { contractTab: 'action', reveal: new Set(), guideStep: null, chartTab: 'worth', adminOpen: false },
 };
-function freshLogin() { return { step: 'user', username: '', info: null, pin: '', firstPin: '', error: '' }; }
+function freshLogin() { return { step: 'user', username: '', info: null, pin: '', firstPin: '', code: '', error: '' }; }
+/** Sign-up codes are stored as ABCDEF and shown as ABC-DEF. */
+const fmtCode = (c) => (c ? `${c.slice(0, 3)}-${c.slice(3)}` : '');
 
 const isOwner = () => S.user?.role === 'owner';
 const game = () => S.state?.game;
@@ -337,8 +339,20 @@ function loginView() {
       </form>
       <p class="hint">No account? Ask a Record Owner to sign you to the label.</p>
       ${privacyLink()}`;
+  } else if (L.step === 'code') {
+    card = `
+      <div class="who">${avatar({ displayName: L.info.displayName, color: L.info.color })}<div><b>${esc(L.info.displayName)}</b><small>@${esc(L.info.username)}</small></div>
+        <button class="btn ghost sm" data-act="login-back">Not you?</button></div>
+      <h2>Enter your sign-up code</h2><p class="sub">First time here! Type the sign-up code your Record Owner gave you. Then you'll pick your own PIN.</p>
+      <form data-form="claim-code" autocomplete="off">
+        <label class="field"><span>Sign-up code</span><input name="code" class="mono code-in" required maxlength="12" autocapitalize="characters" spellcheck="false" placeholder="ABC-DEF" value="${esc(L.code)}" /></label>
+        <div class="pin-err">${esc(L.error)}</div>
+        <button class="btn primary lg block">Continue</button>
+      </form>
+      <p class="hint">No code? Ask your Record Owner. It's on your sign-up slip.</p>
+      ${privacyLink()}`;
   } else {
-    const titles = { pin: ['Enter your PIN', 'Welcome back to the label.'], claim1: ['Create your PIN', 'First time here! Pick a 4 to 6 digit PIN. Your Record Owner can look it up if you forget.'], claim2: ['Confirm your PIN', 'Type the same PIN one more time.'] };
+    const titles = { pin: ['Enter your PIN', 'Welcome back to the label.'], claim1: ['Create your PIN', 'Code accepted! Now pick a 4 to 6 digit PIN. Your Record Owner can look it up if you forget.'], claim2: ['Confirm your PIN', 'Type the same PIN one more time.'] };
     const [t, sub] = titles[L.step];
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'del', '0', 'ok'];
     card = `
@@ -383,7 +397,7 @@ async function submitPin() {
     if (L.step === 'claim1') { L.firstPin = L.pin; L.pin = ''; L.step = 'claim2'; render(); return; }
     if (L.step === 'claim2') {
       if (L.pin !== L.firstPin) { Object.assign(L, { step: 'claim1', pin: '', firstPin: '', error: "Those PINs didn't match. Try again." }); render(); shakePin(); return; }
-      await api('POST', '/api/claim', { username: L.info.username, pin: L.pin });
+      await api('POST', '/api/claim', { username: L.info.username, code: L.code, pin: L.pin });
     } else {
       await api('POST', '/api/login', { username: L.info.username, pin: L.pin });
     }
@@ -1001,7 +1015,7 @@ function adminView(tab) {
     ? `<td class="nowrap dim">${new Date(x.offloaded_at).toLocaleDateString()}</td><td class="r">${x.summary?.artists ?? 0}</td><td>${esc(x.createdByName || '—')}</td><td class="r nowrap"><a class="btn sm" href="#/admin/backups">Details</a></td></tr>`
     : `<td class="nowrap">${x.status === 'setup' ? 'Not started' : `Day ${x.clock.day} of ${x.clock.totalDays}`}</td><td class="r">${x.players ?? 0} / ${x.max_players}</td>
         <td>${esc(x.createdByName || '—')}</td>
-        <td class="r nowrap">${x.id === S.gameId ? '<span class="tag">Open now</span>' : `<button class="btn sm" data-act="open-season" data-id="${x.id}">Open</button>`} <button class="btn sm" data-act="open-season" data-id="${x.id}" data-tab="season">Settings</button></td></tr>`}`).join('')}
+        <td class="r nowrap">${x.id === S.gameId ? '<span class="tag">Open now</span>' : `<button class="btn sm" data-act="open-season" data-id="${x.id}">Open</button>`} <button class="btn sm" data-act="open-season" data-id="${x.id}" data-tab="season">Settings</button>${x.status === 'setup' ? ` <button class="btn sm danger" data-act="delete-season" data-id="${x.id}">Delete…</button>` : ''}</td></tr>`}`).join('')}
       </tbody></table></div>` : empty('flag', 'No seasons yet')}
       <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
   } else if (t === 'backups') {
@@ -1018,19 +1032,20 @@ function adminView(tab) {
   } else if (t === 'roster') {
     const r = st.roster;
     const full = activeRoster().length >= st.game.max_players;
-    body = `<div class="card"><div class="card-head"><h3>${icon('plus')}Sign an artist</h3><span class="more">${activeRoster().length} / ${st.game.max_players} spots used</span></div>
+    body = `${archived ? '' : signupGuide(st)}<div class="card"><div class="card-head"><h3>${icon('plus')}Sign an artist</h3><span class="more">${activeRoster().length} / ${st.game.max_players} spots used</span></div>
       ${archived ? '<p class="muted">This season is archived.</p>' : `<form data-form="add-player"><div class="row">
         <label class="field"><span>Username</span><input name="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_.\\-]{3,24}" autocapitalize="off" placeholder="lil.cardinal" ${full ? 'disabled' : ''} /><small>They sign in with this. Letters, numbers, . _ -</small></label>
         <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" placeholder="Lil Cardinal" ${full ? 'disabled' : ''} /></label>
         <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" placeholder="Producer" ${full ? 'disabled' : ''} /></label>
       </div><button class="btn primary" ${full ? 'disabled' : ''}>${full ? 'Roster full' : 'Sign artist'}</button>
-      <span class="dim" style="font-size:12.5px;margin-left:10px">They'll create their own PIN the first time they sign in.${st.game.status === 'active' && st.game.starting_balance ? ` They'll get the ${money(st.game.starting_balance)} advance right away.` : ''}</span></form>`}</div>
+      <span class="dim" style="font-size:12.5px;margin-left:10px">Give them their sign-up code (it shows in the roster below, or print slips). They use it once to pick their own PIN.${st.game.status === 'active' && st.game.starting_balance ? ` They'll get the ${money(st.game.starting_balance)} advance right away.` : ''}</span></form>`}</div>
       <div class="card"><div class="card-head"><h3>${icon('users')}Roster & PINs</h3>
-        <button class="btn ghost sm more" data-act="reveal-all">${icon(S.ui.reveal.size ? 'eyeOff' : 'eye')}${S.ui.reveal.size ? 'Hide' : 'Show'} all PINs</button></div>
+        ${r.some((p) => !p.claimed && p.active) ? `<button class="btn sm more" data-act="print-slips">${icon('file')}Print sign-up slips</button>` : ''}
+        <button class="btn sm ${r.some((p) => !p.claimed && p.active) ? '' : 'ghost more'}" data-act="reveal-all" style="margin-left:6px">${icon(S.ui.reveal.size ? 'eyeOff' : 'eye')}${S.ui.reveal.size ? 'Hide' : 'Show'} all PINs</button></div>
         ${r.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Artist</th><th>Username</th><th>PIN</th><th>Last seen</th><th class="r">Cash</th><th class="r">Actions</th></tr></thead><tbody>
         ${r.map((p) => `<tr class="${p.active ? '' : 'off'}"><td>${nameLine(p.id)}<div class="dim" style="font-size:12px;margin-left:32px">${esc(p.roleTitle)}</div></td>
           <td class="mono">@${esc(p.username)}</td>
-          <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : '<span class="tag" style="background:var(--brass)">Unclaimed</span>'}</td>
+          <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : `<span class="tag" style="background:var(--brass)">Unclaimed</span>${p.claimCode ? ` <span class="code-chip mono" title="Sign-up code">${esc(fmtCode(p.claimCode))}</span>` : ''}`}</td>
           <td class="dim nowrap">${p.lastSeen ? ago(p.lastSeen) : 'Never'}</td><td class="r num ${p.stats.balance < 0 ? 'red' : 'gold'}">${money(p.stats.balance)}</td>
           <td class="r nowrap"><button class="btn sm" data-act="edit-player" data-id="${p.id}">Edit</button> ${p.claimed ? `<button class="btn sm" data-act="reset-pin" data-id="${p.id}">Reset PIN</button>` : ''}
             <button class="btn sm ${p.active ? 'danger' : ''}" data-act="toggle-player" data-id="${p.id}">${p.active ? 'Remove' : 'Restore'}</button></td></tr>`).join('')}
@@ -1083,7 +1098,7 @@ function adminView(tab) {
     const at = order.indexOf(g.status);
     const desc = { setup: 'Sign artists, set the rules', active: 'Clock running, deals open', showcase: 'Listen; music sharing when you open it', archived: 'Read-only, data export' };
     const controls = {
-      setup: `<button class="btn primary lg" data-act="phase" data-phase="active">${icon('zap')}Start the season</button><p class="dim" style="margin-top:8px">Starts Day 1 of ${g.duration_days}${g.starting_balance ? ` and pays every artist a ${money(g.starting_balance)} advance` : ''}.</p>`,
+      setup: `<button class="btn primary lg" data-act="phase" data-phase="active">${icon('zap')}Start the season</button> <button class="btn danger" data-act="delete-season" data-id="${g.id}">${icon('trash')}Delete season</button><p class="dim" style="margin-top:8px">Starts Day 1 of ${g.duration_days}${g.starting_balance ? ` and pays every artist a ${money(g.starting_balance)} advance` : ''}. A season that was never started (a test, or a mistake) can be deleted.</p>`,
       active: `<button class="btn primary" data-act="phase" data-phase="showcase">${icon('flag')}End season & open Showcase</button><p class="dim" style="margin-top:8px">The season also ends automatically after Day ${g.duration_days}. Open deals stay open for you to settle.</p>`,
       showcase: `<button class="btn" data-act="phase" data-phase="archived">${icon('lock')}Archive season</button> <button class="btn ghost" data-act="phase" data-phase="active">Reopen deals</button><p class="dim" style="margin-top:8px">Archiving makes everything read-only. To reopen deals, make the season longer first.</p>`,
       archived: `<button class="btn" data-act="phase" data-phase="showcase">Reopen Showcase</button>`,
@@ -1099,6 +1114,44 @@ function adminView(tab) {
   return `${pageHead('Record Owner · Admin', label, st && !NO_SEASON_TABS.includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
     <div class="tabs">${ADMIN_TABS.filter(([k]) => st || NO_SEASON_TABS.includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
+}
+
+/** Owners only: the sign-up day checklist, with live progress for this season. */
+function signupGuide(st) {
+  const r = activeRoster();
+  const claimed = r.filter((p) => p.claimed).length;
+  const waiting = r.length - claimed;
+  const g = st.game;
+  const closed = store.get('cr.signupGuide') === 'closed' && waiting === 0 && r.length > 0;
+  const done = (ok) => `<span class="step-mark ${ok ? 'ok' : ''}" aria-hidden="true">${ok ? icon('check') : ''}</span>`;
+  const startingPin = !!S.user?.startingPin;
+  return `<details class="card signup-guide" data-guide="signup" ${closed ? '' : 'open'}>
+    <summary class="card-head"><h3>${icon('bulb')}Sign-up day steps</h3><span class="more">${r.length ? `${claimed} of ${plural(r.length, 'artist')} signed in` : 'No artists yet'}</span></summary>
+    <p class="muted" style="margin-top:-4px">Only Record Owners see this. Follow it top to bottom the first time a class joins.</p>
+    ${r.length ? `<div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="${r.length}" aria-valuenow="${claimed}"><span style="width:${(claimed / r.length) * 100}%"></span></div>` : ''}
+    <ol class="steps">
+      <li>${done(!startingPin)}<div><b>Before class</b>
+        <p>Open the site 2–3 minutes early: the free server sleeps and takes up to a minute to wake. ${startingPin ? '<b class="red">You are still using your starting PIN:</b> <a href="#/profile">change it</a> (6 digits is best).' : 'Your owner PIN has been changed.'} Delete any test seasons that never started in <a href="#/admin/seasons">All seasons</a>.</p></div></li>
+      <li>${done(r.length > 0)}<div><b>Sign each student</b>
+        <p>Use the <b>Sign an artist</b> form below. Pick usernames that aren't full names, like <span class="mono">jsmith27</span> or a stage name. Artist name and role are optional; students can change them later.</p></div></li>
+      <li>${done(waiting === 0 && r.length > 0)}<div><b>Hand out sign-up codes</b>
+        <p>Click <b>Print sign-up slips</b> on the roster below. There's one cut-out slip per student, with the site, their username and their one-time code. Or read each code from the PIN column.</p></div></li>
+      <li>${done(waiting === 0 && r.length > 0)}<div><b>Students sign in</b>
+        <p>They go to <b class="mono">${esc(location.host)}</b>, type their <b>username</b>, then their <b>sign-up code</b>, then pick a <b>4–6 digit PIN</b> and type it again. "Unclaimed" disappears from the roster once they're in.${waiting && r.length ? ` <b>${plural(waiting, 'student')} still to go.</b>` : ''}</p></div></li>
+      <li>${done(g.status !== 'setup')}<div><b>Start the season</b>
+        <p>When everyone's in, go to <a href="#/admin/season">Season settings</a> and click <b>Start the season</b>. That pays each artist the ${money(g.starting_balance)} advance. Students signed later get it straight away.</p></div></li>
+      <li>${done(false)}<div><b>Before they leave</b>
+        <p>On shared computers, students should click <b>Sign out</b>, because sign-ins last 30 days. After sign-up, download a first backup in <a href="#/admin/backups">Backups &amp; offload</a>.</p></div></li>
+    </ol>
+    <div class="trouble"><b>${icon('shield')}If something goes wrong</b>
+      <ul>
+        <li><b>"That sign-up code isn't right":</b> compare it with the code on the roster. Codes never use 0, O, 1, I or L, so there's nothing to mix up. Case, spaces and dashes don't matter.</li>
+        <li><b>"Too many wrong tries":</b> 5 wrong PINs or codes lock that username for 5 minutes. Wait, then try again.</li>
+        <li><b>Lost slip:</b> the code is in the PIN column below.</li>
+        <li><b>Forgot their PIN, or someone else got into their account:</b> click <b>Reset PIN</b>. It signs them out everywhere and gives a new code.</li>
+        <li><b>Wrong season:</b> click <b>Edit</b> and change the Season (only before they have open deals).</li>
+      </ul></div>
+  </details>`;
 }
 
 /** Owners: printable PDF backups of every season, and offloading a finished season. */
@@ -1376,6 +1429,33 @@ const ACTIONS = {
         <label class="field"><span>Type the season's name to confirm</span><input name="confirm" required autocomplete="off" placeholder="${esc(x.name)}" /></label>
         <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger">${icon('trash')}Offload season</button></div></form>`);
   },
+  'print-slips': () => {
+    const list = S.state.roster.filter((p) => !p.claimed && p.active && p.claimCode);
+    const w = window.open('', '_blank');
+    if (!w) return toast('Allow pop-ups for this site to print the slips', 'err');
+    const site = location.origin.replace(/^https?:\/\//, '');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Sign-up slips: ${esc(game().name)}</title>
+      <style>body{font:14px/1.4 Arial,sans-serif;margin:24px}.slips{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+      .slip{border:1.5px dashed #888;padding:14px 16px;break-inside:avoid}.slip h3{margin:0 0 6px;color:#a8132b;font-size:15px}
+      .row{margin:4px 0}.big{font:700 20px/1.2 'Courier New',monospace;letter-spacing:.06em}.dim{color:#555;font-size:12px}
+      @media print{.noprint{display:none}body{margin:10mm}}</style></head><body>
+      <p class="noprint"><button onclick="print()">Print</button> ${list.length} slips. Cut along the dashed lines.</p>
+      <div class="slips">${list.map((p) => `<div class="slip"><h3>Cardinal Records · ${esc(game().name)}</h3>
+        <div class="row">Go to <b>${esc(site)}</b></div>
+        <div class="row">Username: <span class="big">${esc(p.username)}</span></div>
+        <div class="row">Sign-up code: <span class="big">${esc(fmtCode(p.claimCode))}</span></div>
+        <div class="dim">${esc(p.displayName)} · Use the code once to pick your own 4 to 6 digit PIN. Don't share it.</div></div>`).join('')}</div>
+      </body></html>`);
+    w.document.close();
+  },
+  'delete-season': (el) => {
+    const x = S.games.find((g) => g.id === Number(el.dataset.id));
+    if (!x) return;
+    modal(`${modalHead(`Delete ${esc(x.name)}?`, `This season was never started. Deleting it removes the season and its ${plural(x.players ?? 0, 'signed artist')} for good, and frees their usernames. This can't be undone.`)}
+      <form data-form="delete-season"><input type="hidden" name="id" value="${x.id}" />
+        <label class="field"><span>Type the season's name to confirm</span><input name="confirm" required autocomplete="off" placeholder="${esc(x.name)}" /></label>
+        <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger">${icon('trash')}Delete season</button></div></form>`);
+  },
   'remove-season': (el) => confirmModal('Remove from the list?', 'The one-line record of this offloaded season goes away. Your backup files are not affected.', 'Remove', 'danger',
     () => act(async () => { await api('DELETE', `/api/games/${el.dataset.id}`); await loadMe(); }, 'Season removed from the list')),
   hire: (el) => hireModal({ jobId: el.dataset.job, sellerId: Number(el.dataset.seller) || null }),
@@ -1427,8 +1507,12 @@ const ACTIONS = {
   'edit-player': (el) => editPlayerModal(S.state.roster.find((p) => p.id === Number(el.dataset.id))),
   'reset-pin': (el) => {
     const p = S.state.roster.find((x) => x.id === Number(el.dataset.id));
-    confirmModal(`Reset ${esc(p.displayName)}'s PIN?`, 'Their PIN is cleared and they are signed out. They will create a new PIN the next time they sign in.', 'Reset PIN', 'danger',
-      () => act(() => api('POST', `/api/players/${p.id}/reset-pin`), 'PIN reset'));
+    confirmModal(`Reset ${esc(p.displayName)}'s PIN?`, "Their PIN is cleared and they're signed out. They get a new sign-up code to pick a new PIN.", 'Reset PIN', 'danger', async () => {
+      const r = await act(() => api('POST', `/api/players/${p.id}/reset-pin`), 'PIN reset');
+      if (r?.claimCode) modal(`${modalHead(`New sign-up code for ${esc(p.displayName)}`, `They sign in as @${esc(p.username)}, type this code, then pick a new PIN.`)}
+        <div class="code-big mono">${esc(fmtCode(r.claimCode))}</div>
+        <div class="modal-foot"><button class="btn primary" data-act="close-modal">Done</button></div>`);
+    });
   },
   'toggle-player': (el) => {
     const p = S.state.roster.find((x) => x.id === Number(el.dataset.id));
@@ -1482,9 +1566,24 @@ const FORMS = {
   lookup: async (d) => {
     try {
       const info = await api('POST', '/api/login/lookup', { username: d.username });
-      Object.assign(S.login, { username: d.username, info, step: info.claimed ? 'pin' : 'claim1', pin: '', error: '' });
+      Object.assign(S.login, { username: d.username, info, step: info.claimed ? 'pin' : 'code', pin: '', code: '', error: '' });
     } catch (e) { S.login.username = d.username; toast(e.message, 'err'); }
     render();
+  },
+  'claim-code': async (d) => {
+    try {
+      await api('POST', '/api/claim/check', { username: S.login.info.username, code: d.code });
+      Object.assign(S.login, { code: d.code, step: 'claim1', pin: '', error: '' });
+    } catch (e) { S.login.error = e.message; }
+    render();
+  },
+  'delete-season': async (d) => {
+    const ok = await act(async () => {
+      await api('DELETE', `/api/games/${d.id}`, { confirm: d.confirm });
+      if (Number(d.id) === S.gameId) S.gameId = null;
+      await loadMe();
+    }, 'Season deleted');
+    if (ok) { closeModal(); location.hash = '#/admin/seasons'; }
   },
   chat: async (d, f) => { if (await act(() => api('POST', `/api/games/${S.gameId}/feed`, { message: d.message }))) f.reset(); },
   hire: async (d) => {
@@ -1590,6 +1689,11 @@ document.addEventListener('change', async (e) => {
   }
 });
 
+// Remember whether an owner folded away the sign-up steps (they reopen while students are still unclaimed).
+document.addEventListener('toggle', (e) => {
+  if (e.target.dataset?.guide === 'signup') store.set('cr.signupGuide', e.target.open ? 'open' : 'closed');
+}, true);
+
 document.addEventListener('input', (e) => {
   if (e.target.dataset.inputCalc) hireCalc();
 });
@@ -1597,7 +1701,8 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalOpen()) return closeModal();
   if (e.key === 'Escape' && S.ui.adminOpen) { S.ui.adminOpen = false; render(); return $('.admin-btn')?.focus(); }
-  if (!S.user && S.login.step !== 'user') {
+  // Typing goes to the PIN pad, except on the steps that have their own text box.
+  if (!S.user && !['user', 'code'].includes(S.login.step)) {
     if (/^\d$/.test(e.key)) pinKey(e.key);
     else if (e.key === 'Backspace') pinKey('del');
     else if (e.key === 'Enter') pinKey('ok');

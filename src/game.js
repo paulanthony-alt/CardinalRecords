@@ -41,6 +41,12 @@ function httpUrl(v, name) {
   return u.href;
 }
 const isPin = (p) => /^\d{4,6}$/.test(String(p ?? ''));
+
+// Sign-up codes: 6 characters with no look-alikes (no 0/O, 1/I/L), shown as ABC-DEF.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const newClaimCode = () => Array.from({ length: 6 }, () => CODE_ALPHABET[require('node:crypto').randomInt(CODE_ALPHABET.length)]).join('');
+/** What the student typed, tidied: case, spaces and dashes don't matter. */
+const tidyCode = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
 const isUsername = (u) => /^[a-zA-Z0-9_.-]{3,24}$/.test(String(u ?? ''));
 
 // Set by the server: called when a read request changes data (the season clock running out).
@@ -358,7 +364,7 @@ async function contractAction(user, contractId, body) {
 
 module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
-  hooks, HttpError, fail, str, int, httpUrl, isPin, isUsername,
+  hooks, HttpError, fail, str, int, httpUrl, isPin, isUsername, newClaimCode, tidyCode,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
   createContract, contractAction, nameOf, fmt$, sheetFor,
 };

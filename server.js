@@ -98,15 +98,23 @@ function publicUser(u, { withPin = false } = {}) {
     roleTitle: u.role_title, bio: u.bio, color: u.color, active: !!u.active, lastSeen: u.last_seen,
     claimed: u.pin != null, createdAt: u.created_at,
   };
-  if (withPin) out.pin = u.pin;
+  if (withPin) { out.pin = u.pin; out.claimCode = u.pin == null ? u.claim_code : null; }
   return out;
+}
+
+/** Constant-time check of a sign-up code. */
+function codeMatches(user, given) {
+  if (!user.claim_code) return false;
+  const a = Buffer.from(G.tidyCode(given).padEnd(12, ' '));
+  const b = Buffer.from(String(user.claim_code).padEnd(12, ' '));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 // ---------- login (username + PIN, with lockout) ----------
 const attempts = new Map();
 function checkLock(key) {
   const a = attempts.get(key);
-  if (a && a.until > Date.now()) fail(`Too many wrong PINs. Try again in ${Math.ceil((a.until - Date.now()) / 60000)} min.`, 429);
+  if (a && a.until > Date.now()) fail(`Too many wrong tries. Try again in ${Math.ceil((a.until - Date.now()) / 60000)} min.`, 429);
 }
 function recordFail(key) {
   const a = attempts.get(key) || { n: 0, until: 0 };
@@ -139,13 +147,35 @@ app.post('/api/login', async (req, res) => {
   res.json({ ok: true });
 });
 
-// First sign-in: the player picks their own PIN.
-app.post('/api/claim', async (req, res) => {
-  const u = await db.get('SELECT * FROM users WHERE username = ? AND active = 1', str(req.body.username, 'Username', { min: 1, max: 40 }));
+// First sign-in: the player proves it's them with the sign-up code from their
+// Record Owner, then picks their own PIN. Without the code, a classmate who knows
+// the username can't grab the account first.
+async function claimable(req) {
+  const username = str(req.body.username, 'Username', { min: 1, max: 40 });
+  const key = `claim:${username.toLowerCase()}`;
+  checkLock(key);
+  const u = await db.get('SELECT * FROM users WHERE username = ? AND active = 1', username);
   if (!u) fail('Unknown username', 404);
   if (u.pin != null) fail('This account is already claimed. Sign in with your PIN.', 409);
+  if (!codeMatches(u, req.body.code)) {
+    recordFail(key);
+    fail("That sign-up code isn't right. Check the code your Record Owner gave you.", 401);
+  }
+  return { u, key };
+}
+
+app.post('/api/claim/check', async (req, res) => {
+  await claimable(req);
+  res.json({ ok: true });
+});
+
+app.post('/api/claim', async (req, res) => {
+  const { u, key } = await claimable(req);
   if (!G.isPin(req.body.pin)) fail('PIN must be 4 to 6 digits');
-  await db.run('UPDATE users SET pin = ? WHERE id = ? AND pin IS NULL', String(req.body.pin), u.id);
+  // Only the first claim wins, even if two arrive at once.
+  const { changes } = await db.run('UPDATE users SET pin = ?, claim_code = NULL WHERE id = ? AND pin IS NULL AND claim_code = ?', String(req.body.pin), u.id, u.claim_code);
+  if (!changes) fail('This account was just claimed. Sign in with your PIN.', 409);
+  attempts.delete(key);
   await startSession(req, res, u.id);
   res.json({ ok: true });
 });
@@ -295,8 +325,8 @@ app.post('/api/games/:gameId/players', auth, ownerOnly, async (req, res) => {
   const roleTitle = str(req.body.roleTitle, 'Role', { max: 40 });
   const id = await tx(async () => {
     const { id: pid } = await db.run(
-      "INSERT INTO users (username, role, game_id, display_name, role_title, color, created_at) VALUES (?, 'player', ?, ?, ?, ?, ?) RETURNING id",
-      username, game.id, displayName, roleTitle, COLORS[count % COLORS.length], Date.now()
+      "INSERT INTO users (username, role, game_id, display_name, role_title, color, claim_code, created_at) VALUES (?, 'player', ?, ?, ?, ?, ?, ?) RETURNING id",
+      username, game.id, displayName, roleTitle, COLORS[count % COLORS.length], G.newClaimCode(), Date.now()
     );
     if (game.status === 'active') await G.payAdvance(game, pid);
     await G.post(game.id, 'join', pid, `${displayName} signed to the label${roleTitle ? ` as ${roleTitle}` : ''}.`);
@@ -350,12 +380,13 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Clears the PIN; the player sets a new one on next sign-in.
+// Clears the PIN and issues a new sign-up code; the player uses it to set a new PIN.
 app.post('/api/players/:userId/reset-pin', auth, ownerOnly, async (req, res) => {
   const p = await ownedPlayer(req);
-  await db.run('UPDATE users SET pin = NULL WHERE id = ?', p.id);
+  const code = G.newClaimCode();
+  await db.run('UPDATE users SET pin = NULL, claim_code = ? WHERE id = ?', code, p.id);
   await db.run('DELETE FROM sessions WHERE user_id = ?', p.id);
-  res.json({ ok: true });
+  res.json({ ok: true, claimCode: code });
 });
 
 // ---------- treasury (owner) ----------
@@ -604,7 +635,7 @@ async function exportData(game, viewer) {
         xp: s.progress.xp, title: s.progress.title, tracks: s.stats.tracks, likes: s.stats.likes,
         badges: s.badges.map((b) => b.name).join('; '), joined_at: new Date(u.created_at).toISOString(),
       };
-      if (isOwner) row.pin = u.pin;
+      if (isOwner) { row.pin = u.pin; row.claim_code = u.pin == null ? u.claim_code : null; }
       return row;
     }),
     ledger: isOwner
@@ -669,6 +700,29 @@ app.get('/api/backup.pdf', auth, ownerOnly, async (req, res) => {
   await sendBackupPdf(req, res, games, 'cardinal-records-all-seasons');
 });
 
+/**
+ * Delete a season's records and its artists (their usernames free up). Anyone who
+ * still has records in another season is only signed out and detached.
+ * Call inside tx(). Returns how many artists were deleted.
+ */
+async function purgeSeason(gameId) {
+  await db.run('DELETE FROM contract_events WHERE contract_id IN (SELECT id FROM contracts WHERE game_id = ?)', gameId);
+  await db.run('DELETE FROM contracts WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM ledger WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM feed WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM tracks WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM services WHERE game_id = ?', gameId);
+  const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
+    AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.user_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM track_likes k WHERE k.user_id = u.id)
+    AND NOT EXISTS (SELECT 1 FROM services s WHERE s.user_id = u.id)`, gameId);
+  await db.run("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE role = 'player' AND game_id = ?)", gameId);
+  await db.run("UPDATE users SET game_id = NULL, active = 0 WHERE role = 'player' AND game_id = ?", gameId);
+  return gone.changes;
+}
+
 // End of a season: clear its records off the database for a fresh start. Only an
 // archived season that's been backed up since it was archived, and the owner must
 // type its name. The season stays listed as a one-line record.
@@ -690,35 +744,28 @@ app.post('/api/games/:gameId/offload', auth, ownerOnly, async (req, res) => {
     offloadedBy: req.user.display_name,
   };
   const freed = await tx(async () => {
-    await db.run('DELETE FROM contract_events WHERE contract_id IN (SELECT id FROM contracts WHERE game_id = ?)', game.id);
-    await db.run('DELETE FROM contracts WHERE game_id = ?', game.id);
-    await db.run('DELETE FROM ledger WHERE game_id = ?', game.id);
-    await db.run('DELETE FROM feed WHERE game_id = ?', game.id);
-    await db.run('DELETE FROM tracks WHERE game_id = ?', game.id);
-    await db.run('DELETE FROM services WHERE game_id = ?', game.id);
-    // The season's artists go too (their usernames free up for next year). Anyone who
-    // still has records in another season is only signed out and detached.
-    const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
-      AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
-      AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)
-      AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.user_id = u.id)
-      AND NOT EXISTS (SELECT 1 FROM track_likes k WHERE k.user_id = u.id)
-      AND NOT EXISTS (SELECT 1 FROM services s WHERE s.user_id = u.id)`, game.id);
-    await db.run("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE role = 'player' AND game_id = ?)", game.id);
-    await db.run("UPDATE users SET game_id = NULL, active = 0 WHERE role = 'player' AND game_id = ?", game.id);
+    const gone = await purgeSeason(game.id);
     await db.run("UPDATE games SET status = 'offloaded', uploads_open = 0, offloaded_at = ?, summary = ? WHERE id = ?", Date.now(), JSON.stringify(summary), game.id);
-    return gone.changes;
+    return gone;
   });
   SC.drop(game.id);
   res.json({ ok: true, artistsRemoved: freed });
 });
 
-// Take an offloaded season's one-line record off the list.
+// Remove a season entirely: an offloaded season's one-line record, or a season that
+// was never started (a test or a mistake; typing its name confirms). A season that
+// has been played goes through archive, backup and offload first.
 app.delete('/api/games/:gameId', auth, ownerOnly, async (req, res) => {
   const game = await gameFor(req, { offloaded: true });
-  if (game.status !== 'offloaded') fail('Only offloaded seasons can be removed. Archive and offload it first.');
-  await db.run('DELETE FROM games WHERE id = ?', game.id);
-  res.json({ ok: true });
+  if (!['offloaded', 'setup'].includes(game.status)) fail('This season has been played. Archive it, download a backup and offload it first.');
+  if (game.status === 'setup' && String(req.body?.confirm || '').trim().toLowerCase() !== game.name.trim().toLowerCase()) fail("Type the season's name exactly to confirm");
+  const removed = await tx(async () => {
+    const n = game.status === 'setup' ? await purgeSeason(game.id) : 0;
+    await db.run('DELETE FROM games WHERE id = ?', game.id);
+    return n;
+  });
+  SC.drop(game.id);
+  res.json({ ok: true, artistsRemoved: removed });
 });
 
 // ---------- static app ----------
@@ -735,6 +782,10 @@ app.use((err, req, res, next) => {
 (async () => {
   await migrate();
   await loadOwners();
+  // Artists signed before sign-up codes existed get one now.
+  for (const { id } of await db.all("SELECT id FROM users WHERE role = 'player' AND pin IS NULL AND claim_code IS NULL")) {
+    await db.run('UPDATE users SET claim_code = ? WHERE id = ? AND claim_code IS NULL', G.newClaimCode(), id);
+  }
   app.listen(PORT, () => console.log(`Cardinal Records is live on http://localhost:${PORT}`));
 })().catch((err) => {
   console.error('[startup] Could not connect to Postgres:', err.message);
