@@ -30,8 +30,11 @@ app.use(compression());
 
 // Any successful write moves the revision, so browsers know to reload. It's
 // bumped just before the response goes out, so the writer's own reload sees it.
+// Signing in and out changes nothing anyone else sees, so it doesn't count
+// (otherwise 30 students signing in would reload every screen 30 times).
+const NO_BUMP = new Set(['/api/login', '/api/login/lookup', '/api/logout', '/api/claim/check', '/api/me/pin']);
 app.use((req, res, next) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !NO_BUMP.has(req.path)) {
     const json = res.json.bind(res);
     res.json = (body) => { if (res.statusCode < 400) SC.bump(); return json(body); };
   }
