@@ -153,6 +153,13 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
   ADD COLUMN IF NOT EXISTS quantity INTEGER,  -- hours/class blocks or items, for unit pricing
   ADD COLUMN IF NOT EXISTS unit_rate BIGINT;  -- the rate in effect when the deal was made
 
+-- Backups and end-of-season offload. status can also be 'offloaded': the season's
+-- records were deleted after a backup, leaving this row and a small JSON summary.
+ALTER TABLE games ADD COLUMN IF NOT EXISTS archived_at BIGINT,
+  ADD COLUMN IF NOT EXISTS backed_up_at BIGINT,
+  ADD COLUMN IF NOT EXISTS offloaded_at BIGINT,
+  ADD COLUMN IF NOT EXISTS summary TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_ledger_game     ON ledger(game_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_user     ON ledger(user_id);
 CREATE INDEX IF NOT EXISTS idx_contracts_game  ON contracts(game_id, status);
