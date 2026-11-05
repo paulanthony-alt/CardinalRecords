@@ -122,7 +122,7 @@ async function loadMe() {
   S.user = r.user;
   S.games = r.games;
   const saved = Number(store.get('cr.game'));
-  const ids = S.games.map((g) => g.id);
+  const ids = liveGames().map((g) => g.id);
   S.gameId = isOwner() ? (ids.includes(saved) ? saved : ids[0] ?? null) : S.user.gameId;
 }
 
@@ -222,7 +222,10 @@ function cover(seed, color) {
   return `--c1:${esc(c1)};--c2:${c2}`;
 }
 const badgesHtml = (badges) => (badges?.length ? `<div class="badges">${badges.map((b) => `<span class="badge" title="${esc(b.desc)}">${icon('award')}${esc(b.name)}</span>`).join('')}</div>` : '');
-const phaseLabel = { setup: 'Pre-season', active: 'Season live', showcase: 'Showcase', archived: 'Archived' };
+const phaseLabel = { setup: 'Pre-season', active: 'Season live', showcase: 'Showcase', archived: 'Archived', offloaded: 'Offloaded' };
+const phaseClass = { setup: 'offered', active: 'active', showcase: 'review', archived: 'cancelled', offloaded: 'cancelled' };
+/** Seasons that still have data (offloaded ones only keep a one-line record). */
+const liveGames = () => S.games.filter((x) => x.status !== 'offloaded');
 const ranking = () => [...activeRoster()].sort((a, b) => b.stats.netWorth - a.stats.netWorth || b.progress.xp - a.progress.xp);
 
 // ============================================================ contracts logic (client mirror of the server rules)
@@ -397,15 +400,18 @@ const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeri
 
 const ADMIN_TABS = [
   ['review', 'Review queue', 'shield'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
-  ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'], ['new', 'New season', 'plus'],
+  ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'],
+  ['backups', 'Backups & offload', 'download'], ['new', 'New season', 'plus'],
 ];
+/** Admin tabs that work without a season open. */
+const NO_SEASON_TABS = ['seasons', 'backups', 'new'];
 
 /** The Record Owners' pull-down menu. It sits outside the scrolling menu so it never gets clipped. */
 function adminMenu(route) {
   if (!isOwner()) return '';
   const review = S.state ? S.state.contracts.filter((c) => c.status === 'review').length : 0;
   const open = S.ui.adminOpen;
-  const items = ADMIN_TABS.filter(([k]) => S.state || ['seasons', 'new'].includes(k));
+  const items = ADMIN_TABS.filter(([k]) => S.state || NO_SEASON_TABS.includes(k));
   return `<div class="admin-menu">
     <button class="mi admin-btn ${route === 'admin' ? 'on' : ''} ${open ? 'open' : ''}" data-act="admin-menu" aria-haspopup="menu" aria-expanded="${open}">${icon('shield')}Admin${review ? `<span class="count">${review}</span>` : ''}<span class="caret" aria-hidden="true">▾</span></button>
     ${open ? `<div class="admin-drop win" role="menu"><div class="tb"><span class="t">Record Owner</span></div>
@@ -420,7 +426,7 @@ function shellView(view) {
   const nav = navItems().filter((it) => !it.group).map((it) =>
     `<a href="#/${it.to}" class="mi ${navRoute === it.to ? 'on' : ''}">${it.label}${it.count ? `<span class="count">${it.count}</span>` : ''}</a>`).join('');
   const switcher = isOwner() && S.games.length
-    ? `<select class="season-pick" data-change="switch-game" aria-label="Label season">${S.games.map((x) => `<option value="${x.id}" ${x.id === S.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`
+    ? `<select class="season-pick" data-change="switch-game" aria-label="Label season">${liveGames().map((x) => `<option value="${x.id}" ${x.id === S.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`
     : g ? `<span class="season-name">${esc(g.name)}</span>` : '';
   const m = me();
   const u = S.user;
@@ -895,7 +901,7 @@ function dataView() {
       <div class="export-card">${icon('download')}<b>Full archive (.zip)</b><p>All data as JSON and spreadsheet-ready CSVs, including every Showcase track and its link.</p><a class="btn primary" href="/api/games/${g.id}/export.zip" download>Download ZIP</a></div>
       <div class="export-card">${icon('chart')}<b>Raw JSON</b><p>One file with the complete season data, for developers or backups.</p><a class="btn" href="/api/games/${g.id}/export.json" download>Download JSON</a></div>
     </div>
-    ${isOwner() ? '<p class="dim" style="margin-top:12px;font-size:12.5px">Owner exports include player PINs. Store them securely.</p>' : ''}
+    <p class="dim" style="margin-top:12px;font-size:12.5px">${isOwner() ? 'Owner exports include player PINs. Store them securely. For a printable PDF of the class records, use <a href="#/admin/backups">Admin → Backups &amp; offload</a>.' : "Your download has the label's public records plus your own transactions and deals. Other artists' fees and private deal details aren't included."}</p>
     <div class="card" style="margin-top:16px"><div class="card-head"><h3>${icon('dollar')}${isOwner() ? 'Label ledger' : 'Your transactions'}</h3><span class="more">${ledger.length} ${ledger.length === 1 ? 'entry' : 'entries'}</span></div>
       ${ledger.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>When</th>${isOwner() ? '<th>Account</th>' : ''}<th>Type</th><th>Memo</th><th class="r">Amount</th></tr></thead><tbody>
         ${ledger.map((l) => `<tr><td class="nowrap dim">${dateStr(l.at)}</td>${isOwner() ? `<td>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</td>` : ''}<td><span class="tag">${KIND[l.kind] || esc(l.kind)}</span></td><td>${esc(l.memo)}${l.contractId ? ` <a href="#/contract/${l.contractId}" class="dim">${cno(l.contractId)}</a>` : ''}</td><td class="r num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</td></tr>`).join('')}
@@ -939,7 +945,7 @@ function itemForm(form, label, items, button) {
 
 function adminView(tab) {
   const st = S.state;
-  const t = st ? (ADMIN_TABS.some(([k]) => k === tab) ? tab : 'review') : (tab === 'seasons' ? 'seasons' : 'new');
+  const t = st ? (ADMIN_TABS.some(([k]) => k === tab) ? tab : 'review') : (NO_SEASON_TABS.includes(tab) ? tab : 'new');
   const archived = st?.game.status === 'archived';
   let body = '';
   if (t === 'new') body = newSeasonForm();
@@ -948,12 +954,16 @@ function adminView(tab) {
       <p class="muted" style="margin-top:-4px">Every Record Owner can run and change every season, whoever created it.</p>
       ${S.games.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Season</th><th>Phase</th><th>Day</th><th class="r">Artists</th><th>Created by</th><th></th></tr></thead><tbody>
       ${S.games.map((x) => `<tr class="${x.id === S.gameId ? 'me' : ''}"><td><b>${esc(x.name)}</b><div class="dim" style="font-size:12px">${new Date(x.created_at).toLocaleDateString()}</div></td>
-        <td><span class="status s-${{ setup: 'offered', active: 'active', showcase: 'review', archived: 'cancelled' }[x.status]}">${phaseLabel[x.status]}</span></td>
-        <td class="nowrap">${x.status === 'setup' ? 'Not started' : `Day ${x.clock.day} of ${x.clock.totalDays}`}</td><td class="r">${x.players ?? 0} / ${x.max_players}</td>
+        <td><span class="status s-${phaseClass[x.status]}">${phaseLabel[x.status]}</span></td>
+        ${x.status === 'offloaded'
+    ? `<td class="nowrap dim">${new Date(x.offloaded_at).toLocaleDateString()}</td><td class="r">${x.summary?.artists ?? 0}</td><td>${esc(x.createdByName || '—')}</td><td class="r nowrap"><a class="btn sm" href="#/admin/backups">Details</a></td></tr>`
+    : `<td class="nowrap">${x.status === 'setup' ? 'Not started' : `Day ${x.clock.day} of ${x.clock.totalDays}`}</td><td class="r">${x.players ?? 0} / ${x.max_players}</td>
         <td>${esc(x.createdByName || '—')}</td>
-        <td class="r nowrap">${x.id === S.gameId ? '<span class="tag">Open now</span>' : `<button class="btn sm" data-act="open-season" data-id="${x.id}">Open</button>`} <button class="btn sm" data-act="open-season" data-id="${x.id}" data-tab="season">Settings</button></td></tr>`).join('')}
+        <td class="r nowrap">${x.id === S.gameId ? '<span class="tag">Open now</span>' : `<button class="btn sm" data-act="open-season" data-id="${x.id}">Open</button>`} <button class="btn sm" data-act="open-season" data-id="${x.id}" data-tab="season">Settings</button></td></tr>`}`).join('')}
       </tbody></table></div>` : empty('flag', 'No seasons yet')}
       <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
+  } else if (t === 'backups') {
+    body = backupsView();
   } else if (t === 'review') {
     const review = st.contracts.filter((c) => c.status === 'review');
     const openDeals = st.contracts.filter((c) => ['offered', 'countered', 'active', 'delivered'].includes(c.status));
@@ -1044,9 +1054,44 @@ function adminView(tab) {
       <div class="card"><div class="card-head"><h3>${icon('edit')}Season settings</h3></div>${seasonForm(g, 'settings')}</div>`;
   }
   const label = ADMIN_TABS.find(([k]) => k === t)?.[1];
-  return `${pageHead('Record Owner · Admin', label, st && !['seasons', 'new'].includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
-    <div class="tabs">${ADMIN_TABS.filter(([k]) => st || ['seasons', 'new'].includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
+  return `${pageHead('Record Owner · Admin', label, st && !NO_SEASON_TABS.includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
+    <div class="tabs">${ADMIN_TABS.filter(([k]) => st || NO_SEASON_TABS.includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
+}
+
+/** Owners: printable PDF backups of every season, and offloading a finished season. */
+function backupsView() {
+  const live = liveGames();
+  const gone = S.games.filter((x) => x.status === 'offloaded');
+  const when = (ts) => (ts ? dateStr(ts) : '<span class="dim">Never</span>');
+  const fresh = (x) => x.backed_up_at && x.backed_up_at >= (x.archived_at || 0);
+  return `<div class="card"><div class="card-head"><h3>${icon('download')}Back up class data</h3><span class="more">${plural(live.length, 'season')}</span></div>
+      <p class="muted" style="margin-top:-4px">Download a PDF of the class records: every artist's balance and full statement, every contract, the Showcase links and the rate sheet in effect. It opens and prints on any computer, so you still have the records if the website is ever down. Keep a copy after every grading period.</p>
+      <label class="check" style="margin:8px 0 12px"><input type="checkbox" id="backup-pins" /> Include student PINs <span class="dim">(store that copy securely)</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><button class="btn primary" data-act="backup" data-fmt="pdf" ${live.length ? '' : 'disabled'}>${icon('download')}All seasons (PDF)</button></div>
+      ${live.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Season</th><th>Phase</th><th class="r">Artists</th><th>Last backup</th><th class="r">Download</th></tr></thead><tbody>
+      ${live.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td><span class="status s-${phaseClass[x.status]}">${phaseLabel[x.status]}</span></td><td class="r">${x.players ?? 0}</td><td class="nowrap">${when(x.backed_up_at)}</td>
+        <td class="r nowrap"><button class="btn sm" data-act="backup" data-fmt="pdf" data-id="${x.id}">PDF</button> <button class="btn sm" data-act="backup" data-fmt="zip" data-id="${x.id}">ZIP</button></td></tr>`).join('')}
+      </tbody></table></div>` : empty('download', 'No seasons to back up')}
+      <p class="dim" style="font-size:12.5px;margin-top:10px">The ZIP has the same records as spreadsheet-ready CSV files plus raw JSON, and always includes PINs.</p></div>
+    <div class="card"><div class="card-head" style="background:var(--redd)"><h3>${icon('trash')}Offload a finished season</h3></div>
+      <p class="muted" style="margin-top:-4px">Clears a finished season off the server so next year starts fresh: its artists, money, contracts, lobby and Showcase are deleted, and their usernames free up. The season stays in All seasons as a one-line record.</p>
+      <ol class="muted" style="margin:6px 0 12px 18px;line-height:1.7"><li>Archive the season (Season settings).</li><li>Download its backup above (PDF, and the ZIP if you want spreadsheets).</li><li>Offload it here. This can't be undone.</li></ol>
+      ${live.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Season</th><th>Phase</th><th>Ready?</th><th class="r"></th></tr></thead><tbody>
+      ${live.map((x) => {
+    const ready = x.status === 'archived' && fresh(x);
+    const why = x.status !== 'archived' ? 'Archive it first' : fresh(x) ? `Backed up ${dateStr(x.backed_up_at)}` : 'Download a backup first';
+    return `<tr><td><b>${esc(x.name)}</b></td><td><span class="status s-${phaseClass[x.status]}">${phaseLabel[x.status]}</span></td><td class="${ready ? '' : 'dim'}">${why}</td>
+        <td class="r"><button class="btn sm danger" data-act="offload" data-id="${x.id}" ${ready ? '' : 'disabled'}>Offload…</button></td></tr>`;
+  }).join('')}</tbody></table></div>` : '<p class="muted">No seasons yet.</p>'}</div>
+    ${gone.length ? `<div class="card"><div class="card-head"><h3>${icon('lock')}Offloaded seasons</h3><span class="more">${plural(gone.length, 'season')}</span></div>
+      <p class="muted" style="margin-top:-4px">Their records live in the backup files you downloaded.</p>
+      <div class="table-wrap"><table class="t"><thead><tr><th>Season</th><th>Ran</th><th class="r">Artists</th><th class="r">Deals</th><th class="r">Tracks</th><th>Offloaded</th><th class="r"></th></tr></thead><tbody>
+      ${gone.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="nowrap dim">${x.summary?.startedAt ? `${new Date(x.summary.startedAt).toLocaleDateString()} – ${x.summary.endedAt ? new Date(x.summary.endedAt).toLocaleDateString() : ''}` : '—'}</td>
+        <td class="r">${x.summary?.artists ?? 0}</td><td class="r">${x.summary?.deals ?? 0}${x.summary?.dealValue ? ` <span class="dim">(${money(x.summary.dealValue)})</span>` : ''}</td><td class="r">${x.summary?.tracks ?? 0}</td>
+        <td class="nowrap">${new Date(x.offloaded_at).toLocaleDateString()}${x.summary?.offloadedBy ? ` <span class="dim">by ${esc(x.summary.offloadedBy)}</span>` : ''}</td>
+        <td class="r"><button class="btn sm" data-act="remove-season" data-id="${x.id}">Remove from list</button></td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}`;
 }
 
 function seasonForm(g, form) {
@@ -1162,8 +1207,8 @@ function editPlayerModal(p) {
       <label class="field"><span>Username</span><input name="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_.\\-]{3,24}" value="${esc(p.username)}" /></label>
       <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" required value="${esc(p.displayName)}" /></label>
       <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" value="${esc(p.roleTitle)}" /></label>
-      <label class="field"><span>Season</span><select name="gameId">${S.games.filter((x) => x.status !== 'archived' || x.id === p.gameId).map((x) => `<option value="${x.id}" ${x.id === p.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <small>Moving an artist keeps their money and deals in this season's records. In the new season they start fresh.</small></label>
+      <label class="field"><span>Season</span><select name="gameId">${liveGames().filter((x) => x.status !== 'archived' || x.id === p.gameId).map((x) => `<option value="${x.id}" ${x.id === p.gameId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <small>Moving an artist keeps their money and deals in this season's records. In the new season they start fresh. Finish or void their open deals first.</small></label>
       <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">Save</button></div>
     </form>`);
 }
@@ -1265,6 +1310,31 @@ const ACTIONS = {
     await refresh();
     if (el.dataset.tab) location.hash = `#/admin/${el.dataset.tab}`;
   },
+  backup: (el) => {
+    const pins = $('#backup-pins')?.checked ? 1 : 0;
+    const tz = encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+    const url = el.dataset.fmt === 'zip' ? `/api/games/${el.dataset.id}/export.zip`
+      : el.dataset.id ? `/api/games/${el.dataset.id}/backup.pdf?pins=${pins}&tz=${tz}` : `/api/backup.pdf?pins=${pins}&tz=${tz}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast('Preparing your backup. It will download in a moment.', 'ok', 'download');
+    // Pick up the new "last backup" time once the server has built the file.
+    setTimeout(async () => { try { await loadMe(); if (!modalOpen()) render(); } catch {} }, 4000);
+  },
+  offload: (el) => {
+    const x = S.games.find((g) => g.id === Number(el.dataset.id));
+    if (!x) return;
+    modal(`${modalHead(`Offload ${esc(x.name)}?`, `This permanently deletes the season's ${plural(x.players ?? 0, 'artist')}, their money, contracts, lobby and Showcase from the server. Their usernames free up for next season. Make sure you've saved the backup file somewhere safe. This can't be undone.`)}
+      <form data-form="offload"><input type="hidden" name="id" value="${x.id}" />
+        <label class="field"><span>Type the season's name to confirm</span><input name="confirm" required autocomplete="off" placeholder="${esc(x.name)}" /></label>
+        <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger">${icon('trash')}Offload season</button></div></form>`);
+  },
+  'remove-season': (el) => confirmModal('Remove from the list?', 'The one-line record of this offloaded season goes away. Your backup files are not affected.', 'Remove', 'danger',
+    () => act(async () => { await api('DELETE', `/api/games/${el.dataset.id}`); await loadMe(); }, 'Season removed from the list')),
   hire: (el) => hireModal({ jobId: el.dataset.job, sellerId: Number(el.dataset.seller) || null }),
   contract: (el) => contractActionModal(S.state.contracts.find((c) => c.id === Number(el.dataset.id)), el.dataset.a),
   upload: uploadModal,
@@ -1335,7 +1405,7 @@ const ACTIONS = {
     const text = {
       active: game().status === 'setup' ? 'The clock starts now and signing advances are paid out.' : 'Deals reopen for the remaining days.',
       showcase: game().status === 'archived' ? 'Artists can listen again. Open music sharing separately if you want it.' : "No new deals can be made. Music sharing stays closed until you open it.",
-      archived: 'The season becomes read-only. Data stays downloadable.',
+      archived: 'The season becomes read-only. Data stays downloadable, and you can then back it up and offload it in Admin → Backups & offload.',
     }[ph];
     confirmModal(`Move to ${phaseLabel[ph]}?`, text, 'Confirm', 'primary', () => act(() => api('POST', `/api/games/${S.gameId}/phase`, { phase: ph }), 'Season updated'));
   },
@@ -1414,6 +1484,13 @@ const FORMS = {
     return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
+  offload: async (d) => {
+    const ok = await act(async () => {
+      await api('POST', `/api/games/${d.id}/offload`, { confirm: d.confirm });
+      await loadMe();
+    }, 'Season offloaded. Fresh start!');
+    if (ok) { closeModal(); location.hash = '#/admin/backups'; }
+  },
   'new-season': async (d) => {
     try {
       const r = await api('POST', '/api/games', d);

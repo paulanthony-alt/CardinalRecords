@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { db, tx, migrate } = require('./src/db');
 const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
+const { writeBackupPdf } = require('./src/backup');
 const G = require('./src/game');
 const R = require('./src/rates');
 const { fail, str, int } = G;
@@ -68,10 +69,11 @@ const auth = (req, res, next) => (req.user ? next() : res.status(401).json({ err
 const ownerOnly = (req, res, next) =>
   req.user?.role === 'owner' ? next() : res.status(403).json({ error: 'Record Owners only' });
 
-/** Loads the game from :gameId and checks the user belongs to it. */
-async function gameFor(req) {
+/** Loads the game from :gameId and checks the user belongs to it. Offloaded seasons have no data left. */
+async function gameFor(req, { offloaded = false } = {}) {
   const game = await G.getGame(int(req.params.gameId, 'Game'));
   if (req.user.role !== 'owner' && req.user.game_id !== game.id) fail('You are not on this label', 403);
+  if (game.status === 'offloaded' && !offloaded) fail("This season was offloaded. Its records are in the backup files you downloaded.", 410);
   return game;
 }
 
@@ -151,8 +153,10 @@ app.get('/api/me', auth, async (req, res) => {
     user: { ...publicUser(req.user, { withPin: false }), startingPin: usingStartingPin(req.user) },
     games: await Promise.all(games.map(async (g) => {
       const gg = await G.getGame(g.id);
-      const { rate_sheet, ...rest } = gg;
-      return { ...rest, clock: G.clock(gg), players: g.players, createdByName: g.created_by_name };
+      const { rate_sheet, summary, ...rest } = gg;
+      let sum = null;
+      try { sum = summary ? JSON.parse(summary) : null; } catch {}
+      return { ...rest, summary: sum, clock: G.clock(gg), players: g.players, createdByName: g.created_by_name };
     })),
   });
 });
@@ -243,7 +247,7 @@ app.post('/api/games/:gameId/phase', auth, ownerOnly, async (req, res) => {
       await db.run("UPDATE games SET status = 'showcase', ended_at = COALESCE(ended_at, ?) WHERE id = ?", Date.now(), game.id);
       await G.post(game.id, 'phase', req.user.id, game.status === 'archived' ? 'The Showcase has been reopened.' : "The Record Owner called the season. Get your music ready: sharing music to the Showcase opens once a Record Owner turns it on.");
     } else if (phase === 'archived') {
-      await db.run("UPDATE games SET status = 'archived', uploads_open = 0 WHERE id = ?", game.id);
+      await db.run("UPDATE games SET status = 'archived', uploads_open = 0, archived_at = ? WHERE id = ?", Date.now(), game.id);
       await G.post(game.id, 'phase', req.user.id, 'This season has been archived. Thanks for playing Cardinal Records.');
     }
   });
@@ -307,7 +311,15 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
   const gameId = req.body.gameId != null ? int(req.body.gameId, 'Season') : p.game_id;
   const target = await G.getGame(gameId);
   const moving = gameId !== p.game_id;
-  if (moving && target.status === 'archived') fail('That season is archived');
+  if (moving && ['archived', 'offloaded'].includes(target.status)) fail('That season is archived');
+  if (moving && p.game_id) {
+    // Their deals can't be finished from another season, so settle them first.
+    const open = (await db.get(
+      `SELECT COUNT(*) AS n FROM contracts WHERE game_id = ? AND (buyer_id = ? OR seller_id = ?) AND status IN (${G.OPEN_STATUSES.map(() => '?').join(',')})`,
+      p.game_id, p.id, p.id, ...G.OPEN_STATUSES
+    )).n;
+    if (open) fail(`${p.display_name} has ${open} open ${open === 1 ? 'deal' : 'deals'} in this season. Finish, cancel or void ${open === 1 ? 'it' : 'them'} before moving them.`);
+  }
   await tx(async () => {
     if (active && (moving || !p.active)) {
       const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1 AND id != ?", gameId, p.id)).n;
@@ -513,8 +525,8 @@ app.post('/api/games/:gameId/tracks', auth, async (req, res) => {
   const game = await gameFor(req);
   if (req.user.role !== 'player') fail('Only artists can share music', 403);
   if (!game.uploads_open || game.status === 'archived') fail("Music sharing isn't open yet. A Record Owner will open it.");
-  const count = (await db.get('SELECT COUNT(*) AS n FROM tracks WHERE user_id = ?', req.user.id)).n;
-  if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can share up to ${MAX_TRACKS_PER_PLAYER} tracks`);
+  const count = (await db.get('SELECT COUNT(*) AS n FROM tracks WHERE user_id = ? AND game_id = ?', req.user.id, game.id)).n;
+  if (count >= MAX_TRACKS_PER_PLAYER) fail(`You can share up to ${MAX_TRACKS_PER_PLAYER} tracks a season`);
   const b = req.body;
   const url = G.httpUrl(b.url, 'Link');
   const title = str(b.title, 'Track title', { min: 1, max: 100 });
@@ -560,9 +572,22 @@ app.delete('/api/tracks/:trackId', auth, async (req, res) => {
 });
 
 // ---------- export (anyone on the label, any time) ----------
-async function exportData(game, isOwner) {
+// Owners get everything. Artists get what the app already shows them: the public
+// roster, lobby and Showcase, their own transactions, and the private details
+// (terms, notes) only of deals they're part of. Other artists' fines stay private.
+async function exportData(game, viewer) {
+  const isOwner = viewer.role === 'owner';
   const users = await db.all("SELECT * FROM users WHERE role = 'player' AND game_id = ? ORDER BY id", game.id);
   const stats = new Map((await G.playerStats(game)).map((r) => [r.player.id, r]));
+  const pub = G.PUBLIC_STATUSES.map(() => '?').join(',');
+  const contracts = isOwner
+    ? await db.all('SELECT * FROM contracts WHERE game_id = ? ORDER BY id', game.id)
+    : (await db.all(`SELECT * FROM contracts WHERE game_id = ? AND (buyer_id = ? OR seller_id = ? OR status IN (${pub})) ORDER BY id`,
+      game.id, viewer.id, viewer.id, ...G.PUBLIC_STATUSES))
+      .map((c) => (c.buyer_id === viewer.id || c.seller_id === viewer.id ? c : { ...c, terms: '' }));
+  const mine = new Set(contracts.filter((c) => isOwner || c.buyer_id === viewer.id || c.seller_id === viewer.id).map((c) => c.id));
+  const events = (await db.all('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.id', game.id))
+    .filter((e) => mine.has(e.contract_id));
   return {
     exportedAt: new Date().toISOString(),
     game: (({ rate_sheet, ...g }) => ({ ...g, clock: G.clock(game) }))(game),
@@ -579,9 +604,11 @@ async function exportData(game, isOwner) {
       if (isOwner) row.pin = u.pin;
       return row;
     }),
-    ledger: await db.all('SELECT * FROM ledger WHERE game_id = ? ORDER BY id', game.id),
-    contracts: await db.all('SELECT * FROM contracts WHERE game_id = ? ORDER BY id', game.id),
-    contract_events: await db.all('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.id', game.id),
+    ledger: isOwner
+      ? await db.all('SELECT * FROM ledger WHERE game_id = ? ORDER BY id', game.id)
+      : await db.all('SELECT * FROM ledger WHERE game_id = ? AND user_id = ? ORDER BY id', game.id, viewer.id),
+    contracts,
+    contract_events: events,
     feed: await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id),
     tracks: await db.all('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id', game.id),
   };
@@ -589,15 +616,24 @@ async function exportData(game, isOwner) {
 
 const slug = (s) => String(s).replace(/[^a-zA-Z0-9 _-]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'untitled';
 
+/** Remember when an owner last downloaded a season's full records (offloading needs a fresh one). */
+async function markBackedUp(req, games) {
+  if (req.user.role !== 'owner') return;
+  for (const g of games) await db.run('UPDATE games SET backed_up_at = ? WHERE id = ?', Date.now(), g.id);
+}
+
 app.get('/api/games/:gameId/export.json', auth, async (req, res) => {
   const game = await gameFor(req);
   res.set('Content-Disposition', `attachment; filename="cardinal-records-${slug(game.name)}-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json(await exportData(game, req.user.role === 'owner'));
+  const data = await exportData(game, req.user);
+  await markBackedUp(req, [game]);
+  res.json(data);
 });
 
 app.get('/api/games/:gameId/export.zip', auth, async (req, res) => {
   const game = await gameFor(req);
-  const data = await exportData(game, req.user.role === 'owner');
+  const data = await exportData(game, req.user);
+  await markBackedUp(req, [game]);
   const base = `cardinal-records-${slug(game.name)}-${new Date().toISOString().slice(0, 10)}`;
   res.set('Content-Type', 'application/zip');
   res.set('Content-Disposition', `attachment; filename="${base}.zip"`);
@@ -607,6 +643,78 @@ app.get('/api/games/:gameId/export.zip', auth, async (req, res) => {
     zip.add(`${base}/csv/${table}.csv`, toCsv(data[table]));
   }
   zip.finish();
+});
+
+// ---------- backups & offload (owners) ----------
+// A printable PDF of the class records, for when the website is down.
+async function sendBackupPdf(req, res, games, name) {
+  if (!games.length) fail('There are no seasons to back up yet');
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.pdf"`);
+  await writeBackupPdf(res, games, { pins: req.query.pins === '1', by: req.user.display_name, tz: String(req.query.tz || '') });
+  await markBackedUp(req, games);
+}
+
+app.get('/api/games/:gameId/backup.pdf', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  await sendBackupPdf(req, res, [game], `cardinal-records-${slug(game.name)}`);
+});
+
+app.get('/api/backup.pdf', auth, ownerOnly, async (req, res) => {
+  const games = [];
+  for (const { id } of await db.all("SELECT id FROM games WHERE status != 'offloaded' ORDER BY created_at")) games.push(await G.getGame(id));
+  await sendBackupPdf(req, res, games, 'cardinal-records-all-seasons');
+});
+
+// End of a season: clear its records off the database for a fresh start. Only an
+// archived season that's been backed up since it was archived, and the owner must
+// type its name. The season stays listed as a one-line record.
+app.post('/api/games/:gameId/offload', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status !== 'archived') fail('Archive the season before offloading it');
+  if (!game.backed_up_at || game.backed_up_at < (game.archived_at || 0)) fail('Download a backup of this season (PDF or ZIP) first. It has to be taken after the season was archived.');
+  if (String(req.body.confirm || '').trim().toLowerCase() !== game.name.trim().toLowerCase()) fail("Type the season's name exactly to confirm");
+  const stats = await G.playerStats(game);
+  const done = (await db.get("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS v FROM contracts WHERE game_id = ? AND status = 'completed'", game.id));
+  const summary = {
+    artists: stats.length,
+    deals: done.n,
+    dealValue: done.v,
+    tracks: (await db.get('SELECT COUNT(*) AS n FROM tracks WHERE game_id = ?', game.id)).n,
+    startedAt: game.started_at,
+    endedAt: game.ended_at,
+    backedUpAt: game.backed_up_at,
+    offloadedBy: req.user.display_name,
+  };
+  const freed = await tx(async () => {
+    await db.run('DELETE FROM contract_events WHERE contract_id IN (SELECT id FROM contracts WHERE game_id = ?)', game.id);
+    await db.run('DELETE FROM contracts WHERE game_id = ?', game.id);
+    await db.run('DELETE FROM ledger WHERE game_id = ?', game.id);
+    await db.run('DELETE FROM feed WHERE game_id = ?', game.id);
+    await db.run('DELETE FROM tracks WHERE game_id = ?', game.id);
+    await db.run('DELETE FROM services WHERE game_id = ?', game.id);
+    // The season's artists go too (their usernames free up for next year). Anyone who
+    // still has records in another season is only signed out and detached.
+    const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
+      AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.user_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM track_likes k WHERE k.user_id = u.id)
+      AND NOT EXISTS (SELECT 1 FROM services s WHERE s.user_id = u.id)`, game.id);
+    await db.run("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE role = 'player' AND game_id = ?)", game.id);
+    await db.run("UPDATE users SET game_id = NULL, active = 0 WHERE role = 'player' AND game_id = ?", game.id);
+    await db.run("UPDATE games SET status = 'offloaded', uploads_open = 0, offloaded_at = ?, summary = ? WHERE id = ?", Date.now(), JSON.stringify(summary), game.id);
+    return gone.changes;
+  });
+  res.json({ ok: true, artistsRemoved: freed });
+});
+
+// Take an offloaded season's one-line record off the list.
+app.delete('/api/games/:gameId', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req, { offloaded: true });
+  if (game.status !== 'offloaded') fail('Only offloaded seasons can be removed. Archive and offload it first.');
+  await db.run('DELETE FROM games WHERE id = ?', game.id);
+  res.json({ ok: true });
 });
 
 // ---------- static app ----------

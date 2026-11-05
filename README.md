@@ -45,7 +45,20 @@ Anyone on a label can download that season's data at any time from **Data & Expo
 - a **ZIP** with `data.json` (including the season's rate sheet) and CSVs (players, ledger, contracts with their job and pricing, contract events, feed, tracks with their links)
 - or raw JSON
 
-Owner exports include PINs. Player exports don't.
+Owner exports have everything, including PINs. A player's export has what the app already shows them: the public roster, lobby and Showcase, their own transactions, and the private details only of deals they're part of. Other players' fines and private deal terms aren't included.
+
+## Backups and offloading (owners)
+
+**Admin → Backups & offload**:
+- **PDF backup**, for one season or all of them. It's a printable copy of the class records: roster and balances, each artist's full statement with running balance, every contract, the Showcase links and the rate sheet in effect. Use it if the website is ever down. Tick *Include student PINs* only for a copy you'll store securely.
+- **Offload a finished season**, so next year starts fresh:
+  1. archive the season;
+  2. download its backup (PDF or ZIP) after archiving;
+  3. type the season's name to confirm.
+
+  Offloading deletes the season's artists, money, contracts, lobby and Showcase from the database, and frees their usernames. The season stays in **All seasons** as a one-line record (artists, deals, tracks, dates), which can also be removed. This can't be undone.
+
+All data lives in the Neon database, not on the Render server (Render's free disk is wiped on every restart anyway). Neon's free plan has 0.5 GB of storage; a 30-artist season uses well under 1 MB, so offloading is about a clean slate rather than space.
 
 ## Configuration
 
@@ -86,6 +99,8 @@ src/db.js         Postgres pool, schema and transaction helper
 src/game.js       Game rules: money, escrow, contract state machine, XP, phases
 src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export
+src/backup.js     Printable PDF backup of the class records
+src/rates.js      The class rate sheet (jobs, payouts, fees and fines)
 public/           Single-page client (no build step)
   app.js          UI and routing
   guide.js        Release Guide content

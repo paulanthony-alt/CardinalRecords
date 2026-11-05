@@ -322,6 +322,8 @@ async function contractAction(user, contractId, body) {
       // The rate sheet's late fee: the artist pays it, the client who hired them doesn't.
       case 'late_fee': {
         need(isOwner && ['active', 'delivered', 'completed'].includes(c.status));
+        // Once per deal, so a double click can't charge the artist twice.
+        if (await db.get("SELECT 1 FROM contract_events WHERE contract_id = ? AND action = 'late_fee'", c.id)) fail('The late fee was already charged on this deal', 409);
         const fine = findItem(sheetFor(game).fines, 'late-incomplete');
         await ledgerEntry(c.game_id, c.seller_id, -fine.amount, 'fine', { contractId: c.id, memo: `${fine.name}: ${c.title}`, by: user.id });
         await contractEvent(c.id, user.id, action, note, fine.amount);
