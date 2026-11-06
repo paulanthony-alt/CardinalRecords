@@ -128,7 +128,12 @@ input[type=checkbox], input[type=radio] { accent-color: var(--red); width: 15px;
 .check { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 
 /* ---------- login ---------- */
-.login { min-height: 100vh; display: grid; place-items: center; padding: 20px 16px 60px; }
+.login { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: 18px; padding: 20px 16px 60px; }
+.welcome-banner { display: flex; align-items: center; justify-content: center; gap: 14px; max-width: 760px; width: 100%; text-align: center;
+  color: #fff; font-weight: 900; font-size: 30px; line-height: 1.1; letter-spacing: .05em; text-shadow: 3px 3px 0 var(--redd), 0 0 18px rgba(0,0,0,.35); white-space: nowrap; }
+.welcome-banner .nb { white-space: nowrap; }
+.welcome-banner .bird { flex: none; fill: var(--brass); }
+.welcome-banner .bird.flip { transform: scaleX(-1); }
 .login-win { width: 100%; max-width: 760px; }
 .login-body { display: grid; grid-template-columns: 1fr 1.05fr; gap: 3px; }
 .login-art { background: var(--red); color: #fff; padding: 26px 24px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--sunk); }
@@ -552,7 +557,9 @@ table.t tr.off td { color: var(--lo); }
 }
 @media (max-width: 760px) {
   input[type=text], input[type=number], input[type=search], input[type=password], input:not([type]), select, textarea { font-size: 16px; }
-  .login { padding-top: 12px; }
+  .login { padding-top: 12px; gap: 10px; }
+  .welcome-banner { font-size: 21px; gap: 8px; letter-spacing: .04em; white-space: normal; }
+  .welcome-banner .bird { width: 20px; height: 20px; }
   .login-body { grid-template-columns: 1fr; }
   .login-art { padding: 16px; gap: 8px; }
   .login-art h1 { font-size: 30px; }

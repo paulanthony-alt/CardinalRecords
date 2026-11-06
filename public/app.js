@@ -367,6 +367,7 @@ function loginView() {
   }
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   return `<div class="login">
+    <div class="welcome-banner">${bird(30)}<span>WELCOME TO <span class="nb">CARDINAL RECORDS</span></span>${bird(30, 'flip')}</div>
     <div class="win login-win" role="dialog" aria-labelledby="login-t">
       <div class="tb"><span class="t" id="login-t">Log On to Cardinal Records</span></div>
       <div class="login-body">
