@@ -88,6 +88,25 @@ Neon's free plan has 1 GB of storage, 100 compute-hours and 5 GB of data transfe
 
 Measured on a busy late-season class (30 students, 300 deals): a full refresh used to read about 260 KB from the database. Now one change plus all 30 students reloading reads about 120 KB in total. That's roughly 40 MB per busy class-hour, or about 2 GB a month at two hours a day.
 
+## Tests
+
+```bash
+npm test
+```
+
+`tests/run-all.sh` creates a throwaway Postgres cluster, starts a local copy of the app, and runs every suite:
+- sign-up codes and season delete;
+- a 30-student classroom run through every main flow;
+- every page as a student and an owner, on phone and laptop sizes;
+- a stress test with 30 students at once;
+- a check that the shared cache matches the database;
+- PDF backups and offload;
+- the sign-up flow, the owner-only steps and two-owner sync, in a browser.
+
+It prints a pass/fail summary and exits non-zero if anything fails. The browser suites need Playwright and are skipped without it (`SKIP_UI=1` skips them on purpose). `tests/live-smoke.js` checks the live site's sign-in page. A weekly check runs all of this and reports the site's status.
+
+`GET /healthz` returns `{ ok, version, commit, upSince }`, so the deployed version can be checked.
+
 ## Configuration
 
 | Env var | Default | |
