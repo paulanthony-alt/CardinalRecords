@@ -24,7 +24,11 @@ app.disable('x-powered-by');
 // Health check for the host (Render). It skips the database on purpose so frequent probes
 // don't keep Neon's compute from scaling to zero; the server only starts listening after
 // migrate() has reached Postgres, so a bad DATABASE_URL still fails the deploy.
-app.get('/healthz', (req, res) => res.json({ ok: true }));
+// Health check (Render uses it) also says what's running, for the weekly status report.
+// RENDER_GIT_COMMIT is set by Render on every deploy.
+const VERSION = require('./package.json').version;
+const STARTED = Date.now();
+app.get('/healthz', (req, res) => res.json({ ok: true, version: VERSION, commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null, upSince: new Date(STARTED).toISOString() }));
 app.use(express.json({ limit: '200kb' }));
 app.use(compression());
 

@@ -1,13 +1,14 @@
 {
   "name": "cardinal-records",
-  "version": "1.0.6",
-  "description": "Cardinal Records — a multiplayer record label simulation game",
+  "version": "1.0.7",
+  "description": "Cardinal Records \u2014 a multiplayer record label simulation game",
   "main": "server.js",
   "private": true,
   "scripts": {
     "build": "node --check server.js && node --check src/db.js && node --check src/game.js && node --check src/owners.js && node --check src/zip.js && node --check public/app.js && node --check public/guide.js && node --check src/rates.js && node --check src/backup.js && node --check src/statecache.js",
     "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local server.js",
-    "dev": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --watch server.js"
+    "dev": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --watch server.js",
+    "test": "bash tests/run-all.sh"
   },
   "engines": {
     "node": ">=22.13"
