@@ -47,6 +47,36 @@ Owners see a **Sign-up day steps** checklist at the top of Roster & PINs. It sho
 
 A season that was **never started** (a test, or a mistake) can be deleted from All seasons or Season settings by typing its name. This removes its signed artists and frees their usernames. Seasons that have been played go through archive, backup and offload instead.
 
+## Admin bar and lobby controls (owners)
+
+Record Owners get an **admin bar** under the menu on every page. It shows:
+- the open season and its phase;
+- a lobby chat switch and a music sharing switch;
+- counts of deals waiting for review, hidden posts, muted students and students who haven't signed in yet;
+- links to the main Admin pages.
+
+Students never see it.
+
+**Admin → Lobby controls** (also in the admin bar):
+- **Chat:**
+  - *Open*: students read and post.
+  - *Announcements only*: students read; only owners post.
+  - *Lobby hidden*: the lobby disappears from students' menu and home page.
+- **What students see:** turn each kind of lobby post on or off for students:
+  - student chat
+  - announcements
+  - deals signed
+  - deals paid out
+  - label payments and bonuses
+  - new artists joining
+  - music shared
+  - Release Guide finished
+  - season updates
+- **Who can chat:** mute or unmute a student. A muted student can still read the lobby and play.
+- **Every post**, with **Hide** (students stop seeing it; owners still can), **Pin** (keeps it at the top of the lobby), **Delete** (gone for good), **Mute** (the student who wrote it), and **Delete all student chat**.
+
+The same Hide, Pin, Mute and Delete buttons appear on each post in the Lobby for owners. Students' screens, home pages and data downloads only ever include what they're allowed to see.
+
 ## Data export
 
 Anyone on a label can download that season's data at any time from **Data & Export**:
@@ -148,6 +178,7 @@ src/owners.js     Record Owner bootstrap
 src/zip.js        Streaming ZIP and CSV export
 src/backup.js     Printable PDF backup of the class records
 src/statecache.js Shared, incrementally refreshed season state (keeps database traffic low)
+src/lobby.js      Lobby controls: chat modes, what students see, pinned post
 src/rates.js      The class rate sheet (jobs, payouts, fees and fines)
 public/           Single-page client (no build step)
   app.js          UI and routing

@@ -25,6 +25,7 @@ const LOOKBACK = 50;
 const FEED_KEEP = 150;
 const cache = new Map(); // gameId -> entry
 const pending = new Map(); // gameId -> Promise, so simultaneous polls share one refresh
+const generation = new Map(); // gameId -> number, bumped by drop() so an in-flight refresh can't put back stale rows
 
 function fresh(gameId) {
   return {
@@ -37,6 +38,7 @@ function fresh(gameId) {
 }
 
 async function refresh(game) {
+  const gen = generation.get(game.id) || 0;
   let e = cache.get(game.id);
   // A change of phase can mean deleted rows (offload) or wrapped clocks: start over.
   if (!e || e.status !== game.status) e = fresh(game.id);
@@ -84,6 +86,8 @@ async function refresh(game) {
 
   e.rev = at;
   e.status = game.status;
+  // Dropped while this ran (a message was hidden/deleted): don't keep it, read again from scratch.
+  if ((generation.get(gid) || 0) !== gen) { cache.delete(gid); return refresh(game); }
   cache.set(gid, e);
   return e;
 }
@@ -100,6 +104,7 @@ async function entryFor(game) {
   return got.rev === REV ? got : refresh(game);
 }
 
-const drop = (gameId) => cache.delete(gameId);
+/** Forget a season's copy (after edits to old rows: hidden or deleted messages, offload). */
+const drop = (gameId) => { generation.set(gameId, (generation.get(gameId) || 0) + 1); cache.delete(gameId); };
 
 module.exports = { bump, rev, entryFor, drop };

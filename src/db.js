@@ -155,6 +155,11 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 
 -- Backups and end-of-season offload. status can also be 'offloaded': the season's
 -- records were deleted after a backup, leaving this row and a small JSON summary.
+-- Lobby controls: hidden messages, per-season lobby settings (JSON, see src/lobby.js), muted artists.
+ALTER TABLE feed ADD COLUMN IF NOT EXISTS hidden INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS lobby TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS muted INTEGER NOT NULL DEFAULT 0;
+
 -- One-time sign-up code a new artist needs (with their username) to pick their PIN.
 -- Cleared once they've claimed the account; a PIN reset issues a new one.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS claim_code TEXT;

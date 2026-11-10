@@ -634,3 +634,47 @@ table.t tr.off td { color: var(--lo); }
 .signup-guide .trouble { margin-top: 10px; padding: 10px 12px; background: var(--note); border: 1px solid var(--rule); font-size: 13px; }
 .signup-guide .trouble ul { margin: 6px 0 0 18px; padding: 0; line-height: 1.55; }
 .signup-guide .trouble b svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+
+/* ---------- admin bar (Record Owners only) ---------- */
+.admin-bar { position: sticky; top: 30px; z-index: 29; display: flex; align-items: center; gap: 6px; padding: 4px 8px; min-height: 32px;
+  background: var(--desk2); color: #f3dfe3; border-bottom: 1px solid #000; font-size: 12.5px; overflow-x: auto; scrollbar-width: thin; white-space: nowrap; }
+.admin-bar .ab-title { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: var(--red); color: #fff; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; box-shadow: var(--raised-soft); }
+.admin-bar .ab-title svg { width: 13px; height: 13px; }
+.admin-bar .ab-season { padding: 0 4px; }
+.admin-bar .ab-season b { color: #fff; }
+.admin-bar .ab-phase { color: var(--brass); font-weight: 700; }
+.admin-bar .ab-ctl { display: inline-flex; align-items: center; gap: 5px; color: #f3dfe3; font: inherit; }
+.admin-bar select { width: auto; min-width: 0; height: 22px; padding: 0 4px; font-size: 12px; background: var(--chrome); border: 0; box-shadow: var(--sunk); color: var(--ink); }
+.admin-bar .ab-toggle { height: 22px; padding: 0 8px; border: 0; cursor: pointer; background: var(--chrome); color: var(--ink); box-shadow: var(--raised); font-weight: 700; }
+.admin-bar .ab-toggle.on { background: var(--ok); color: #fff; }
+.admin-bar .ab-toggle svg { width: 12px; height: 12px; }
+.admin-bar .ab-item { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; color: #f3dfe3; text-decoration: none; border: 1px solid transparent; }
+.admin-bar .ab-item:hover, .admin-bar .ab-item.on { border-color: #f3dfe3; color: #fff; }
+.admin-bar .ab-item b { min-width: 18px; padding: 0 5px; text-align: center; background: rgba(255,255,255,.15); color: #fff; }
+.admin-bar .ab-item.warn b { background: var(--brass); color: #000; }
+.admin-bar .ab-links { margin-left: auto; display: inline-flex; gap: 2px; padding-left: 8px; border-left: 1px solid rgba(255,255,255,.2); }
+
+/* ---------- lobby moderation ---------- */
+.btn.xs { min-height: 20px; padding: 1px 7px; font-size: 11px; gap: 4px; }
+.btn.xs svg { width: 11px; height: 11px; }
+.feed .mod { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.feed li.is-hidden { opacity: .55; }
+.feed li.is-hidden:hover { opacity: 1; }
+.tag.hidden-tag { background: var(--dk); color: #fff; }
+.pinned { position: relative; margin: 6px 0 10px; padding: 6px 10px 2px; background: var(--note); border: 1px solid var(--brass); }
+.pinned > svg { position: absolute; top: 8px; right: 10px; width: 14px; height: 14px; color: var(--red); }
+.pinned .lbl { display: block; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--red); }
+.pinned .feed { margin: 0; }
+.note { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; background: var(--note); border: 1px solid var(--rule); font-size: 13.5px; }
+.note svg { width: 14px; height: 14px; flex: none; }
+.lobby-mode { display: flex; align-items: center; gap: 6px; font-size: 12.5px; margin: -4px 0 8px; }
+.lobby-mode svg { width: 12px; height: 12px; }
+.radio-cards { display: grid; gap: 6px; }
+.radio-card { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: start; padding: 8px 10px; background: var(--paper); box-shadow: var(--sunk); cursor: pointer; }
+.radio-card input { grid-row: span 2; margin-top: 3px; }
+.radio-card span { font-size: 12.5px; color: var(--dk); }
+.radio-card.on { outline: 2px solid var(--red); outline-offset: -2px; }
+.mute-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 14px; }
+.mute-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.mute-row .btn { margin-left: auto; }
+@media (max-width: 760px) { .admin-bar { top: 0; position: relative; } .admin-bar .ab-links { margin-left: 0; } }
