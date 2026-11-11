@@ -7,6 +7,7 @@ const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const { writeBackupPdf } = require('./src/backup');
 const SC = require('./src/statecache');
+const LB = require('./src/lobby');
 const compression = require('compression');
 const G = require('./src/game');
 const R = require('./src/rates');
@@ -105,7 +106,7 @@ function publicUser(u, { withPin = false } = {}) {
     roleTitle: u.role_title, bio: u.bio, color: u.color, active: !!u.active, lastSeen: u.last_seen,
     claimed: u.pin != null, createdAt: u.created_at,
   };
-  if (withPin) { out.pin = u.pin; out.claimCode = u.pin == null ? u.claim_code : null; }
+  if (withPin) { out.pin = u.pin; out.claimCode = u.pin == null ? u.claim_code : null; out.muted = !!u.muted; }
   return out;
 }
 
@@ -205,7 +206,7 @@ app.get('/api/me', auth, async (req, res) => {
     user: { ...publicUser(req.user, { withPin: false }), startingPin: usingStartingPin(req.user) },
     games: await Promise.all(games.map(async (g) => {
       const gg = await G.getGame(g.id);
-      const { rate_sheet, summary, ...rest } = gg;
+      const { rate_sheet, summary, lobby: _l, ...rest } = gg;
       let sum = null;
       try { sum = summary ? JSON.parse(summary) : null; } catch {}
       return { ...rest, summary: sum, clock: G.clock(gg), players: g.players, createdByName: g.created_by_name };
@@ -358,6 +359,7 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
   const roleTitle = req.body.roleTitle != null ? str(req.body.roleTitle, 'Role', { max: 40 }) : p.role_title;
   let active = p.active;
   if (req.body.active != null) active = req.body.active ? 1 : 0;
+  const muted = req.body.muted != null ? (req.body.muted ? 1 : 0) : p.muted;
   // Moving an artist to another season: their money and deals stay in the old season's
   // records; in the new one they start fresh (with its advance if it's already live).
   const gameId = req.body.gameId != null ? int(req.body.gameId, 'Season') : p.game_id;
@@ -377,7 +379,7 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
       const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1 AND id != ?", gameId, p.id)).n;
       if (count >= target.max_players) fail(`${target.name} is full (${target.max_players} artists max)`);
     }
-    await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, p.id);
+    await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ?, muted = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, muted, p.id);
     if (moving) {
       if (target.status === 'active') await G.payAdvance(target, p.id);
       await G.post(gameId, 'join', p.id, `${displayName} joined ${target.name}${roleTitle ? ` as ${roleTitle}` : ''}.`);
@@ -512,8 +514,13 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
       };
     });
 
-  const feed = [...e.feed.values()].sort((a, b) => b.created_at - a.created_at || b.id - a.id).slice(0, 150)
-    .map((f) => ({ id: f.id, kind: f.kind, actorId: f.actor_id, message: f.message, at: f.created_at }));
+  // Lobby: students only see what the Record Owners allow; owners see everything.
+  const lobby = LB.lobbyOf(game);
+  const canSee = (f) => isOwner || LB.studentCanSee(f, lobby);
+  const feedOut = (f) => ({ id: f.id, kind: f.kind, actorId: f.actor_id, message: f.message, at: f.created_at, ...(isOwner ? { hidden: !!f.hidden } : {}) });
+  const feed = [...e.feed.values()].filter(canSee).sort((a, b) => b.created_at - a.created_at || b.id - a.id).slice(0, 150).map(feedOut);
+  let pinned = lobby.pinned ? (e.feed.get(lobby.pinned) || await db.get('SELECT * FROM feed WHERE id = ? AND game_id = ?', lobby.pinned, game.id)) : null;
+  if (pinned && !canSee(pinned)) pinned = null;
 
   const myLikes = new Set(e.likes.filter((l) => l.user_id === me.id).map((l) => l.track_id));
   const tracks = e.tracks.map((t) => ({
@@ -525,9 +532,10 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
   const ledgerRows = isOwner ? ledgerAll.slice(0, 500) : ledgerAll.filter((l) => l.user_id === me.id).slice(0, 300);
   const vault = ledgerAll.reduce((a, l) => (l.user_id == null ? a + l.amount : a), 0);
 
-  const { rate_sheet, summary, ...gameOut } = game;
+  const { rate_sheet, summary, lobby: _lobby, ...gameOut } = game;
   res.json({
     rev,
+    lobby: { chat: lobby.chat, show: lobby.show, pinned: pinned ? feedOut(pinned) : null, mutedMe: !isOwner && !!me.muted, categories: LB.CATEGORIES },
     game: { ...gameOut, clock: G.clock(game) },
     rates: R.sheetFor(game),
     roster, owners: e.owners, former: e.former, contracts: contractsOut, feed, tracks, vault,
@@ -542,8 +550,67 @@ app.post('/api/games/:gameId/feed', auth, async (req, res) => {
   if (game.status === 'archived') fail('This season is archived');
   const message = str(req.body.message, 'Message', { min: 1, max: 280 });
   const kind = req.user.role === 'owner' ? 'announcement' : 'chat';
+  if (kind === 'chat') {
+    const lobby = LB.lobbyOf(game);
+    if (lobby.chat === 'off') fail('The lobby is closed right now.', 403);
+    if (lobby.chat === 'announce') fail('Only Record Owners can post in the lobby right now.', 403);
+    if (req.user.muted) fail('A Record Owner has paused your chat. You can still read the lobby.', 403);
+  }
   await G.post(game.id, kind, req.user.id, message);
   res.json({ ok: true });
+});
+
+// ---------- lobby controls (owners) ----------
+app.put('/api/games/:gameId/lobby', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  const lobby = LB.updatedLobby(game, req.body || {}, fail);
+  await db.run('UPDATE games SET lobby = ? WHERE id = ?', JSON.stringify(lobby), game.id);
+  res.json({ ok: true, lobby });
+});
+
+async function feedRow(req) {
+  const f = await db.get('SELECT * FROM feed WHERE id = ?', int(req.params.feedId, 'Message'));
+  if (!f) fail('That message is gone', 404);
+  return f;
+}
+
+// Hide or show one lobby post for students, or pin it to the top.
+app.post('/api/feed/:feedId/moderate', auth, ownerOnly, async (req, res) => {
+  const f = await feedRow(req);
+  const game = await G.getGame(f.game_id);
+  const action = String(req.body.action || '');
+  if (action === 'hide' || action === 'show') {
+    await db.run('UPDATE feed SET hidden = ? WHERE id = ?', action === 'hide' ? 1 : 0, f.id);
+  } else if (action === 'pin' || action === 'unpin') {
+    const lobby = LB.updatedLobby(game, { pinned: action === 'pin' ? f.id : null }, fail);
+    await db.run('UPDATE games SET lobby = ? WHERE id = ?', JSON.stringify(lobby), game.id);
+  } else fail('Unknown action');
+  SC.drop(game.id); // edits to old rows aren't picked up incrementally
+  res.json({ ok: true });
+});
+
+// Delete one lobby post for good.
+app.delete('/api/feed/:feedId', auth, ownerOnly, async (req, res) => {
+  const f = await feedRow(req);
+  const game = await G.getGame(f.game_id);
+  await db.run('DELETE FROM feed WHERE id = ?', f.id);
+  if (LB.lobbyOf(game).pinned === f.id) {
+    await db.run('UPDATE games SET lobby = ? WHERE id = ?', JSON.stringify(LB.updatedLobby(game, { pinned: null }, fail)), game.id);
+  }
+  SC.drop(game.id);
+  res.json({ ok: true });
+});
+
+// Delete every student chat message in a season (announcements and activity stay).
+app.post('/api/games/:gameId/lobby/clear-chat', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  const { changes } = await db.run("DELETE FROM feed WHERE game_id = ? AND kind = 'chat'", game.id);
+  const lobby = LB.lobbyOf(game);
+  if (lobby.pinned && !(await db.get('SELECT 1 FROM feed WHERE id = ?', lobby.pinned))) {
+    await db.run('UPDATE games SET lobby = ? WHERE id = ?', JSON.stringify(LB.updatedLobby(game, { pinned: null }, fail)), game.id);
+  }
+  SC.drop(game.id);
+  res.json({ ok: true, deleted: changes });
 });
 
 // ---------- contracts ----------
@@ -650,7 +717,9 @@ async function exportData(game, viewer) {
       : await db.all('SELECT * FROM ledger WHERE game_id = ? AND user_id = ? ORDER BY id', game.id, viewer.id),
     contracts,
     contract_events: events,
-    feed: await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id),
+    feed: isOwner
+      ? await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)
+      : (await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)).filter((f) => LB.studentCanSee(f, LB.lobbyOf(game))).map(({ hidden, ...f }) => f),
     tracks: await db.all('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id', game.id),
   };
 }

@@ -418,7 +418,7 @@ function navItems() {
   items.push(
     { group: 'The Label' },
     { to: 'hq', label: 'HQ', ic: 'home' },
-    { to: 'lobby', label: 'Lobby', ic: 'message' },
+    ...(lobbyVisible() ? [{ to: 'lobby', label: 'Lobby', ic: 'message' }] : []),
     { to: 'rates', label: 'Rate Sheet', ic: 'dollar' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'roster', label: 'Roster', ic: 'users' },
@@ -455,7 +455,7 @@ function taskAction() {
 const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
 const ADMIN_TABS = [
-  ['review', 'Review queue', 'shield'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
+  ['review', 'Review queue', 'shield'], ['lobby', 'Lobby controls', 'message'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
   ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'],
   ['backups', 'Backups & offload', 'download'], ['new', 'New season', 'plus'],
 ];
@@ -472,6 +472,28 @@ function adminMenu(route) {
     <button class="mi admin-btn ${route === 'admin' ? 'on' : ''} ${open ? 'open' : ''}" data-act="admin-menu" aria-haspopup="menu" aria-expanded="${open}">${icon('shield')}Admin${review ? `<span class="count">${review}</span>` : ''}<span class="caret" aria-hidden="true">▾</span></button>
     ${open ? `<div class="admin-drop win" role="menu"><div class="tb"><span class="t">Record Owner</span></div>
       ${items.map(([k, l, ic]) => `<a role="menuitem" href="#/admin/${k}" data-act="admin-go">${icon(ic)}${l}${k === 'review' && review ? `<span class="count">${review}</span>` : ''}</a>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+/** Owner-only control strip under the menu bar: the season at a glance and the controls used most. */
+function adminBar(route) {
+  if (!isOwner() || !S.state) return '';
+  const st = S.state; const g = st.game; const L = lobby();
+  const review = st.contracts.filter((c) => c.status === 'review').length;
+  const hidden = st.feed.filter((f) => f.hidden).length;
+  const muted = st.roster.filter((p) => p.muted && p.active).length;
+  const unclaimed = st.roster.filter((p) => !p.claimed && p.active).length;
+  const item = (href, label, n, warn) => `<a class="ab-item ${warn ? 'warn' : ''} ${route === 'admin' && location.hash === href ? 'on' : ''}" href="${href}">${label}${n != null ? `<b>${n}</b>` : ''}</a>`;
+  return `<div class="admin-bar" role="toolbar" aria-label="Record Owner controls">
+    <span class="ab-title">${icon('shield')}Admin</span>
+    <span class="ab-season"><b>${esc(g.name)}</b> <span class="ab-phase">${phaseLabel[g.status]}</span></span>
+    <label class="ab-ctl">Lobby <select data-change="lobby-chat" aria-label="Lobby chat setting">${Object.entries(CHAT_LABEL).map(([k, v]) => `<option value="${k}" ${L.chat === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    ${g.status !== 'archived' ? `<button class="ab-ctl ab-toggle ${uploadsOpen() ? 'on' : ''}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}" title="Music sharing">${icon('music')}Music ${uploadsOpen() ? 'open' : 'closed'}</button>` : ''}
+    ${item('#/admin/review', 'Review', review, review > 0)}
+    ${item('#/admin/lobby', 'Hidden posts', hidden)}
+    ${item('#/admin/lobby', 'Muted', muted)}
+    ${unclaimed ? item('#/admin/roster', 'Not signed in', unclaimed, true) : ''}
+    <span class="ab-links">${item('#/admin/lobby', 'Lobby controls')}${item('#/admin/roster', 'Roster')}${item('#/admin/treasury', 'Treasury')}${item('#/admin/season', 'Season')}${item('#/admin/backups', 'Backups')}</span>
   </div>`;
 }
 
@@ -505,6 +527,7 @@ function shellView(view) {
         <span class="who-name">${esc(m?.displayName || u.displayName)}</span>
         <button class="mi" data-act="logout">Sign out</button></div>
     </header>
+    ${adminBar(route)}
     <section class="view" id="view">${u.startingPin && route !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
     <footer class="taskbar raised">
       <a class="btn start" href="#/hq">${bird(16)}Cardinal</a>
@@ -576,7 +599,7 @@ function hqView() {
       </div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
-        <div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${feedList(S.state.feed.slice(0, 7))}</div>
+        ${lobbyVisible() ? `<div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(S.state.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 7))}</div>` : ''}
       </div>
     </div>`;
 }
@@ -603,7 +626,7 @@ function ownerHqView() {
         ${review.length ? review.slice(0, 5).map(reviewItem).join('') : empty('check', 'Queue is clear', 'New contracts land here once both artists agree.')}</div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
-        <div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${feedList(st.feed.slice(0, 6))}</div>
+        <div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(st.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 6))}</div>
       </div>
     </div>`;
 }
@@ -615,29 +638,62 @@ function miniChart() {
     <td class="pos">${i + 1}</td><td>${nameLine(p.id)}</td><td class="r num gold">${money(p.stats.netWorth)}</td></tr>`).join('')}</table>`;
 }
 
+/** Lobby settings from the server (chat mode, what students see, pinned post). */
+const lobby = () => S.state?.lobby || { chat: 'open', show: {}, pinned: null, mutedMe: false, categories: [] };
+/** Students only see the lobby when the Record Owners haven't hidden it. */
+const lobbyVisible = () => isOwner() || lobby().chat !== 'off';
+const CHAT_LABEL = { open: 'Chat open', announce: 'Announcements only', off: 'Lobby hidden' };
+
 const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award' };
-function feedList(items) {
-  if (!items.length) return empty('message', 'Quiet in here', 'Activity across the label will show up here.');
-  return `<ul class="feed">${items.map((f) => {
-    const p = person(f.actorId);
-    if (f.kind === 'chat' || f.kind === 'announcement') {
-      return `<li class="k-${f.kind}">${f.kind === 'chat' ? avatar(p) : `<span class="ico">${icon('shield')}</span>`}<div class="body">
-        <div><b>${esc(p?.displayName || 'Record Owner')}</b> <time>· ${ago(f.at)}</time>${f.kind === 'announcement' ? ' <span class="tag">Label</span>' : ''}</div>
-        <div class="chat-msg">${esc(f.message)}</div></div></li>`;
-    }
-    return `<li class="k-${f.kind}"><span class="ico">${icon(FEED_ICON[f.kind] || 'zap')}</span><div class="body"><div class="msg">${esc(f.message)}</div><time>${ago(f.at)}</time></div></li>`;
-  }).join('')}</ul>`;
+/** Owner-only buttons on a lobby post: hide/show, pin, delete, and mute the student who wrote it. */
+function modTools(f) {
+  if (!isOwner()) return '';
+  const p = f.kind === 'chat' ? person(f.actorId) : null;
+  const pinned = lobby().pinned?.id === f.id;
+  const b = (a, label, cls = '') => `<button class="btn xs ${cls}" data-act="mod" data-id="${f.id}" data-a="${a}">${label}</button>`;
+  return `<div class="mod">${f.hidden ? b('show', `${icon('eye')}Show`) : b('hide', `${icon('eyeOff')}Hide`)}${b(pinned ? 'unpin' : 'pin', pinned ? 'Unpin' : 'Pin')}
+    ${p && p.role === 'player' ? `<button class="btn xs" data-act="mute" data-id="${p.id}" data-on="${p.muted ? 0 : 1}">${p.muted ? 'Unmute' : 'Mute'} ${esc(p.displayName.split(' ')[0])}</button>` : ''}${b('delete', `${icon('trash')}Delete`, 'danger')}</div>`;
 }
+
+function feedItem(f, { mod = false } = {}) {
+  const p = person(f.actorId);
+  const tools = mod ? modTools(f) : '';
+  const flag = f.hidden ? ' <span class="tag hidden-tag" title="Students can\'t see this">Hidden</span>' : '';
+  if (f.kind === 'chat' || f.kind === 'announcement') {
+    return `<li class="k-${f.kind} ${f.hidden ? 'is-hidden' : ''}">${f.kind === 'chat' ? avatar(p) : `<span class="ico">${icon('shield')}</span>`}<div class="body">
+      <div><b>${esc(p?.displayName || 'Record Owner')}</b> <time>· ${ago(f.at)}</time>${f.kind === 'announcement' ? ' <span class="tag">Label</span>' : ''}${flag}</div>
+      <div class="chat-msg">${esc(f.message)}</div>${tools}</div></li>`;
+  }
+  return `<li class="k-${f.kind} ${f.hidden ? 'is-hidden' : ''}"><span class="ico">${icon(FEED_ICON[f.kind] || 'zap')}</span><div class="body"><div class="msg">${esc(f.message)}${flag}</div><time>${ago(f.at)}</time>${tools}</div></li>`;
+}
+
+function feedList(items, opts = {}) {
+  if (!items.length) return empty('message', 'Quiet in here', 'Activity across the label will show up here.');
+  return `<ul class="feed">${items.map((f) => feedItem(f, opts)).join('')}</ul>`;
+}
+
+/** The pinned post, shown at the top of the lobby. */
+const pinnedPost = (opts = {}) => (lobby().pinned ? `<div class="pinned">${icon('flag')}<span class="lbl">Pinned</span><ul class="feed">${feedItem(lobby().pinned, opts)}</ul></div>` : '');
 
 function lobbyView() {
   const st = S.state;
+  const L = lobby();
+  if (!lobbyVisible()) return `${pageHead('The Label', 'Lobby', '')}${empty('lock', 'The lobby is closed right now', 'The Record Owners have closed the lobby for now.')}`;
   const board = st.contracts.filter((c) => ['active', 'delivered'].includes(c.status));
   const around = activeRoster().filter(online);
+  const composer = `<form class="composer" data-form="chat"><input name="message" maxlength="280" placeholder="${isOwner() ? 'Post an announcement to the whole label…' : 'Say something to the label…'}" autocomplete="off" required /><button class="btn primary">${icon('send')}Post</button></form>`;
+  let top = '';
+  if (st.game.status === 'archived') top = '';
+  else if (isOwner()) top = `${composer}<p class="dim lobby-mode">${icon('shield')}${CHAT_LABEL[L.chat]} for students. <a href="#/admin/lobby">Lobby controls</a></p>`;
+  else if (L.chat === 'announce') top = `<div class="note">${icon('lock')}Only Record Owners can post in the lobby right now.</div>`;
+  else if (L.mutedMe) top = `<div class="note">${icon('lock')}A Record Owner has paused your chat. You can still read the lobby.</div>`;
+  else top = composer;
   return `${pageHead('The Label', 'Lobby', 'Everything happening at Cardinal Records: approved deals, payouts, new signings and labelmate chatter.')}
     <div class="grid-2" style="margin-top:0">
       <div class="card">
-        ${st.game.status !== 'archived' ? `<form class="composer" data-form="chat"><input name="message" maxlength="280" placeholder="${isOwner() ? 'Post an announcement to the whole label…' : 'Say something to the label…'}" autocomplete="off" required /><button class="btn primary">${icon('send')}Post</button></form>` : ''}
-        ${feedList(st.feed)}
+        ${top}
+        ${pinnedPost({ mod: isOwner() })}
+        ${feedList(st.feed.filter((f) => f.id !== L.pinned?.id), { mod: isOwner() })}
       </div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('file')}Deal board</h3><span class="more">${plural(board.length, 'active deal')}</span></div>
@@ -1021,6 +1077,8 @@ function adminView(tab) {
       <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
   } else if (t === 'backups') {
     body = backupsView();
+  } else if (t === 'lobby') {
+    body = lobbyControlsView();
   } else if (t === 'review') {
     const review = st.contracts.filter((c) => c.status === 'review');
     const openDeals = st.contracts.filter((c) => ['offered', 'countered', 'active', 'delivered'].includes(c.status));
@@ -1115,6 +1173,35 @@ function adminView(tab) {
   return `${pageHead('Record Owner · Admin', label, st && !NO_SEASON_TABS.includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
     <div class="tabs">${ADMIN_TABS.filter(([k]) => st || NO_SEASON_TABS.includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
+}
+
+/** Owners only: how the lobby works for students, what they see, who can chat, and every post. */
+function lobbyControlsView() {
+  const st = S.state; const L = lobby();
+  const modes = [
+    ['open', 'Chat open', 'Students can read the lobby and post messages.'],
+    ['announce', 'Announcements only', 'Students can read the lobby, but only Record Owners can post.'],
+    ['off', 'Lobby hidden', "Students can't see the lobby at all. It disappears from their menu and home page."],
+  ];
+  const players = st.roster.filter((p) => p.active);
+  const posts = st.feed;
+  return `<div class="grid-2" style="margin-top:0">
+    <div class="card"><div class="card-head"><h3>${icon('message')}Chat</h3><span class="more">${CHAT_LABEL[L.chat]}</span></div>
+      <div class="radio-cards">${modes.map(([k, label, desc]) => `<label class="radio-card ${L.chat === k ? 'on' : ''}"><input type="radio" name="chatmode" value="${k}" data-change="lobby-chat" ${L.chat === k ? 'checked' : ''} /><b>${label}</b><span>${desc}</span></label>`).join('')}</div>
+      <p class="dim" style="font-size:12.5px;margin-top:8px">Record Owners can always post announcements and always see everything, including hidden posts.</p></div>
+    <form class="card" data-form="lobby-show"><div class="card-head"><h3>${icon('eye')}What students see</h3></div>
+      <p class="muted" style="margin-top:-4px">Untick anything students shouldn't see in the lobby or on their home page. It's hidden right away; nothing is deleted.</p>
+      ${L.categories.map((c) => `<label class="check"><input type="checkbox" name="${c.id}" ${L.show[c.id] !== false ? 'checked' : ''} /> ${esc(c.label)}</label>`).join('')}
+      <button class="btn primary" style="margin-top:10px">${icon('check')}Save</button></form>
+  </div>
+  <div class="card"><div class="card-head"><h3>${icon('users')}Who can chat</h3><span class="more">${players.filter((p) => p.muted).length} muted</span></div>
+    <p class="muted" style="margin-top:-4px">A muted student can still read the lobby and play the game; they just can't post.</p>
+    ${players.length ? `<div class="mute-list">${players.map((p) => `<div class="mute-row">${nameLine(p.id)}${p.muted ? '<span class="tag hidden-tag">Muted</span>' : ''}<button class="btn sm ${p.muted ? '' : 'ghost'}" data-act="mute" data-id="${p.id}" data-on="${p.muted ? 0 : 1}">${p.muted ? 'Unmute' : 'Mute'}</button></div>`).join('')}</div>` : '<p class="muted">No artists yet.</p>'}</div>
+  <div class="card"><div class="card-head"><h3>${icon('shield')}Every post</h3><span class="more">${plural(posts.length, 'post')}${posts.some((f) => f.hidden) ? ` · ${posts.filter((f) => f.hidden).length} hidden` : ''}</span></div>
+    <p class="muted" style="margin-top:-4px"><b>Hide</b> keeps a post but takes it away from students. <b>Delete</b> removes it for good. <b>Pin</b> keeps one post at the top of the lobby.</p>
+    <div style="margin:6px 0 10px"><button class="btn sm danger" data-act="clear-chat">${icon('trash')}Delete all student chat…</button></div>
+    ${pinnedPost({ mod: true })}
+    ${feedList(posts.filter((f) => f.id !== L.pinned?.id), { mod: true })}</div>`;
 }
 
 /** Owners only: the sign-up day checklist, with live progress for this season. */
@@ -1430,6 +1517,19 @@ const ACTIONS = {
         <label class="field"><span>Type the season's name to confirm</span><input name="confirm" required autocomplete="off" placeholder="${esc(x.name)}" /></label>
         <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger">${icon('trash')}Offload season</button></div></form>`);
   },
+  mod: (el) => {
+    const a = el.dataset.a; const id = el.dataset.id;
+    const msgs = { hide: 'Hidden from students', show: 'Students can see it again', pin: 'Pinned to the top of the lobby', unpin: 'Unpinned' };
+    if (a === 'delete') return confirmModal('Delete this post?', 'It disappears from the lobby for everyone, for good. To keep a copy, hide it instead.', 'Delete', 'danger', () => act(() => api('DELETE', `/api/feed/${id}`), 'Post deleted'));
+    return act(() => api('POST', `/api/feed/${id}/moderate`, { action: a }), msgs[a]);
+  },
+  mute: (el) => {
+    const p = S.state.roster.find((x) => x.id === Number(el.dataset.id));
+    const on = el.dataset.on === '1';
+    return act(() => api('PATCH', `/api/players/${p.id}`, { muted: on }), on ? `${p.displayName} can't post in the lobby now` : `${p.displayName} can post again`);
+  },
+  'clear-chat': () => confirmModal('Delete all student chat?', `Every chat message students posted in ${esc(game().name)} is deleted for good. Announcements and label activity stay.`, 'Delete all chat', 'danger',
+    () => act(() => api('POST', `/api/games/${S.gameId}/lobby/clear-chat`), 'Student chat cleared')),
   'print-slips': () => {
     const list = S.state.roster.filter((p) => !p.claimed && p.active && p.claimCode);
     const w = window.open('', '_blank');
@@ -1627,6 +1727,11 @@ const FORMS = {
     return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
+  'lobby-show': (d, f) => {
+    const show = {};
+    for (const el of f.querySelectorAll('input[type=checkbox]')) show[el.name] = el.checked;
+    return act(() => api('PUT', `/api/games/${S.gameId}/lobby`, { show }), 'Saved: students see the lobby your way');
+  },
   offload: async (d) => {
     const ok = await act(async () => {
       await api('POST', `/api/games/${d.id}/offload`, { confirm: d.confirm });
@@ -1675,6 +1780,8 @@ document.addEventListener('change', async (e) => {
     S.gameId = Number(el.value);
     store.set('cr.game', S.gameId);
     await refresh();
+  } else if (k === 'lobby-chat') {
+    await act(() => api('PUT', `/api/games/${S.gameId}/lobby`, { chat: el.value }), `Lobby: ${CHAT_LABEL[el.value]}`);
   } else if (k === 'guide-done') {
     await setGuideDone(el.dataset.step, el.checked);
     rerenderGuide();
