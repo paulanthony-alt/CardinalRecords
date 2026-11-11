@@ -300,6 +300,7 @@ function privacyModal() {
       <ul>
         <li>Your <b>username</b> (set by your Record Owner) and the <b>artist name, role, bio and color</b> you choose.</li>
         <li>Your <b>PIN</b>, so you can sign in. Record Owners can look it up if you forget it, so don't reuse a PIN from anywhere else.</li>
+        <li>Your <b>artist profile link</b>, if you add one (a Google Slides or Doc you share).</li>
         <li><b>What you do in the game:</b> your label money, deals and ratings, lobby messages, Release Guide progress and the music links you share.</li>
         <li>When you were <b>last online</b>, for the online dot.</li>
         <li>One <b>sign-in cookie</b> that keeps you signed in on this device for up to 30 days. No other cookies.</li>
@@ -308,7 +309,7 @@ function privacyModal() {
       <ul>
         <li>No email, phone number, address, birthday, photo or location.</li>
         <li>No ads, analytics or tracking, and nothing is sold or shared. The site loads nothing from other companies.</li>
-        <li>Music links open on the streaming site (Spotify, SoundCloud…), which has its own privacy policy.</li>
+        <li>Music and artist profile links open on the site they're on (Spotify, SoundCloud, Google…), which has its own privacy policy.</li>
       </ul>
       <h4>Who can see it</h4>
       <ul>
@@ -644,7 +645,35 @@ const lobby = () => S.state?.lobby || { chat: 'open', show: {}, pinned: null, mu
 const lobbyVisible = () => isOwner() || lobby().chat !== 'off';
 const CHAT_LABEL = { open: 'Chat open', announce: 'Announcements only', off: 'Lobby hidden' };
 
-const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award' };
+/** What kind of Google page an artist profile link is, for its button label. */
+function profileKind(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'sites.google.com') return 'Google Site';
+    if (u.hostname === 'drive.google.com') return 'Google Drive';
+    if (u.pathname.startsWith('/presentation')) return 'Google Slides';
+    if (u.pathname.startsWith('/document')) return 'Google Doc';
+  } catch {}
+  return 'Google';
+}
+const profileLink = (p, cls = 'btn sm') => `<a class="${cls}" href="${esc(p.profileUrl)}" target="_blank" rel="noopener noreferrer">${icon('external')}View ${profileKind(p.profileUrl)}</a>`;
+
+/** Showcase: every artist's profile link (Google Slides/Docs), shown all season so labelmates can see who to hire. */
+function profilesSection() {
+  const all = activeRoster();
+  const withLink = all.filter((p) => p.profileUrl);
+  const m = me();
+  return `<div class="card profiles"><div class="card-head"><h3>${icon('user')}Artist profiles</h3><span class="more">${withLink.length} of ${plural(all.length, 'artist')}</span></div>
+    <p class="muted" style="margin-top:-4px">Each artist's Google Slides or Doc shows what they're great at. Use it to pick who to hire.${m ? ` ${m.profileUrl ? `<a href="#/profile">Change your link</a>` : `<a href="#/profile"><b>Add yours</b></a> in your Profile.`}` : ''}</p>
+    ${withLink.length ? `<div class="profile-grid">${withLink.map((p) => `<div class="profile-card">
+      <a class="pc-head" href="#/artist/${p.id}">${avatar(p, 'lg')}<div><b>${esc(p.displayName)}</b><small>${esc(p.roleTitle || 'Artist')}</small></div></a>
+      ${p.bio ? `<p class="pc-bio">${esc(p.bio.length > 110 ? `${p.bio.slice(0, 110)}…` : p.bio)}</p>` : ''}
+      <div class="pc-actions">${profileLink(p, 'btn sm primary')}${isOwner() ? `<button class="btn sm ghost" data-act="clear-profile" data-id="${p.id}">Remove</button>` : ''}</div></div>`).join('')}</div>`
+      : empty('user', 'No artist profiles yet', m ? 'Make a Google Slides or Doc about what you do best, share it so anyone with the link can view, then paste the link in your Profile.' : 'Artists add theirs from their Profile page.')}
+  </div>`;
+}
+
+const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award', profile: 'user' };
 /** Owner-only buttons on a lobby post: hide/show, pin, delete, and mute the student who wrote it. */
 function modTools(f) {
   if (!isOwner()) return '';
@@ -831,7 +860,7 @@ function artistView(id) {
       <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red);text-transform:uppercase">Level ${p.progress.level} · ${esc(p.progress.title)}</div>
       <h1>${esc(p.displayName)}</h1><div class="muted">${esc(p.roleTitle || 'Artist')} · @${esc(p.username)}${online(p) ? ' · <span class="green">Online</span>' : ''}</div>
       ${p.bio ? `<div class="bio">${esc(p.bio)}</div>` : ''}${badgesHtml(p.badges)}</div>
-      ${canHire ? `<button class="btn primary" data-act="hire" data-seller="${p.id}">${icon('dollar')}Hire ${esc(p.displayName)}</button>` : ''}</div></div>
+      <div class="hero-actions">${p.profileUrl ? profileLink(p, 'btn') : ''}${canHire ? `<button class="btn primary" data-act="hire" data-seller="${p.id}">${icon('dollar')}Hire ${esc(p.displayName)}</button>` : ''}</div></div></div>
     <div class="stats">
       ${stat('Chart', rank ? `#${rank}` : '—', '', 'red', 'chart')}
       ${stat('Net worth', money(p.stats.netWorth), '', 'gold', 'dollar')}
@@ -889,8 +918,9 @@ function showcaseView() {
   const m = me();
   if (['setup', 'active'].includes(g.status) && !uploadsOpen()) {
     const left = g.status === 'setup' ? g.duration_days : g.clock.daysLeft;
-    return `${pageHead('Season Finale', 'Showcase')}
-      <div class="card lock"><div class="big">${icon('lock')}</div>
+    return `${pageHead('Season Finale', 'Showcase', 'Artist profiles are open all season. Music sharing opens when the season wraps.')}
+      ${profilesSection()}
+      <div class="card lock" style="margin-top:16px"><div class="big">${icon('lock')}</div>
         <h2>The Showcase opens when the season wraps</h2>
         <p>At the end of the season, once a Record Owner opens music sharing, every artist shares a link to the music they made here (Spotify, SoundCloud, YouTube…) and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
         <div class="countdown"><div><b>${left}</b><small>Days to go</small></div><div><b>${g.status === 'setup' ? 0 : g.clock.day}</b><small>Current day</small></div><div><b>${g.duration_days}</b><small>Season length</small></div></div>
@@ -899,10 +929,12 @@ function showcaseView() {
   }
   const tracks = S.state.tracks;
   const canUpload = m && uploadsOpen();
+  const profiles = profilesSection();
   return `${phaseBanner()}
     ${pageHead('Season Finale', 'Showcase', `${plural(tracks.length, 'track')} from ${plural(new Set(tracks.map((t) => t.userId)).size, 'artist')}. Tap a track to listen, show some love.`,
       `${uploadToggle()}${canUpload ? `<button class="btn primary" data-act="upload">${icon('upload')}Share your music</button>` : ''}`)}
-    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to share a track.' : uploadsOpen() ? 'Artists are getting their links ready.' : "Music sharing isn't open yet. A Record Owner will open it.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Share your music</button>' : '')}`;
+    ${tracks.length ? `<div class="tracks">${tracks.map(trackCard).join('')}</div>` : empty('music', 'No music yet', canUpload ? 'Be the first to share a track.' : uploadsOpen() ? 'Artists are getting their links ready.' : "Music sharing isn't open yet. A Record Owner will open it.", canUpload ? '<button class="btn primary" data-act="upload" style="margin-top:10px">Share your music</button>' : '')}
+    ${profiles}`;
 }
 
 // ---------- release guide ----------
@@ -985,6 +1017,8 @@ function profileView() {
           <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" value="${esc(p.roleTitle)}" placeholder="Producer, vocalist, engineer…" /></label>
           <label class="field"><span>Bio</span><textarea name="bio" maxlength="500" placeholder="What do you bring to the label?">${esc(p.bio)}</textarea></label>
           <label class="field"><span>Color</span><input type="color" name="color" value="${esc(p.color || '#D62839')}" /></label>
+          ${m ? `<label class="field"><span>Artist profile link</span><input name="profileUrl" type="url" inputmode="url" maxlength="500" value="${esc(m.profileUrl || '')}" placeholder="https://docs.google.com/presentation/…" />
+            <small>A Google Slides or Google Doc showing what you're great at. In Google, click <b>Share</b> and set it so anyone with the link (or anyone at your school) can view. It shows in the Showcase and on your artist page. Leave it empty to remove it.</small></label>` : ''}
           <button class="btn primary">Save profile</button>
         </form></div>
       <div class="stack">
@@ -1522,6 +1556,11 @@ const ACTIONS = {
     const msgs = { hide: 'Hidden from students', show: 'Students can see it again', pin: 'Pinned to the top of the lobby', unpin: 'Unpinned' };
     if (a === 'delete') return confirmModal('Delete this post?', 'It disappears from the lobby for everyone, for good. To keep a copy, hide it instead.', 'Delete', 'danger', () => act(() => api('DELETE', `/api/feed/${id}`), 'Post deleted'));
     return act(() => api('POST', `/api/feed/${id}/moderate`, { action: a }), msgs[a]);
+  },
+  'clear-profile': (el) => {
+    const p = S.state.roster.find((x) => x.id === Number(el.dataset.id));
+    confirmModal(`Remove ${esc(p.displayName)}'s profile link?`, "It's taken off the Showcase and their artist page. They can add a new one from their Profile.", 'Remove link', 'danger',
+      () => act(() => api('PATCH', `/api/players/${p.id}`, { profileUrl: '' }), 'Profile link removed'));
   },
   mute: (el) => {
     const p = S.state.roster.find((x) => x.id === Number(el.dataset.id));

@@ -155,6 +155,9 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 
 -- Backups and end-of-season offload. status can also be 'offloaded': the season's
 -- records were deleted after a backup, leaving this row and a small JSON summary.
+-- Artist profile: a link to a Google Slides/Docs page showing what the artist is good at.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_url TEXT;
+
 -- Lobby controls: hidden messages, per-season lobby settings (JSON, see src/lobby.js), muted artists.
 ALTER TABLE feed ADD COLUMN IF NOT EXISTS hidden INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE games ADD COLUMN IF NOT EXISTS lobby TEXT NOT NULL DEFAULT '{}';

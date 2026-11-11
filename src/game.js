@@ -40,6 +40,18 @@ function httpUrl(v, name) {
   if (!['https:', 'http:'].includes(u.protocol) || !u.hostname.includes('.')) fail(`${name} must be a link like https://open.spotify.com/…`);
   return u.href;
 }
+// Artist profiles are Google Slides, Docs, Drive files or Sites. Keeping to Google keeps the
+// links school-friendly (students' school Google accounts) and predictable for teachers.
+const PROFILE_HOSTS = ['docs.google.com', 'drive.google.com', 'sites.google.com'];
+/** '' clears the link; anything else must be a Google Slides/Docs/Drive/Sites link. */
+function profileUrl(v) {
+  if (v == null || String(v).trim() === '') return null;
+  const href = httpUrl(v, 'Artist profile link');
+  const host = new URL(href).hostname.toLowerCase();
+  if (!PROFILE_HOSTS.includes(host)) fail('Use a Google Slides, Google Docs, Google Drive or Google Sites link (it should start with https://docs.google.com/…)');
+  return href.replace(/^http:/, 'https:');
+}
+
 const isPin = (p) => /^\d{4,6}$/.test(String(p ?? ''));
 
 // Sign-up codes: 6 characters with no look-alikes (no 0/O, 1/I/L), shown as ABC-DEF.
@@ -364,7 +376,7 @@ async function contractAction(user, contractId, body) {
 
 module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
-  hooks, HttpError, fail, str, int, httpUrl, isPin, isUsername, newClaimCode, tidyCode,
+  hooks, HttpError, fail, str, int, httpUrl, profileUrl, isPin, isUsername, newClaimCode, tidyCode,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
   createContract, contractAction, nameOf, fmt$, sheetFor,
 };

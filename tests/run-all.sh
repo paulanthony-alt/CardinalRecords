@@ -41,6 +41,7 @@ export NODE_PATH="$(npm root -g)"
 
 fresh cr_codes; start cr_codes "tester:0000:Tester" && node "$T/signup-codes.test.js" "$OUT" > "$OUT/codes.txt" 2>&1; stop; record "Sign-up codes and season delete" "$OUT/codes.txt"
 fresh cr_lobby; start cr_lobby "tester:0000:Tester" && node "$T/lobby.test.js" "$OUT" > "$OUT/lobby.txt" 2>&1; stop; record "Lobby controls (hide, pin, delete, mute, chat modes)" "$OUT/lobby.txt"
+fresh cr_prof; start cr_prof "tester:0000:Tester" && node "$T/profiles.test.js" "$OUT" > "$OUT/profiles.txt" 2>&1; stop; record "Artist profile links" "$OUT/profiles.txt"
 fresh cr_class; start cr_class "$OWN" && node "$T/classroom.test.js" "$OUT" > "$OUT/class.txt" 2>&1; record "Classroom flows (30 students)" "$OUT/class.txt"
 if [ $HAVE_UI = 1 ]; then node "$T/every-page.ui.js" "$OUT" 2>&1 | grep -v "401 (Unauthorized)" > "$OUT/pages.txt"; [ -s "$OUT/pages.txt" ] || echo "no problems" > "$OUT/pages.txt"; record "Every page, student + owner, phone + laptop" "$OUT/pages.txt" "no problems"; fi
 node "$T/drift.js" save "$OUT" >/dev/null 2>&1; stop; start cr_class "$OWN"; node "$T/drift.js" compare "$OUT" > "$OUT/drift.txt" 2>&1; record "Shared cache matches the database" "$OUT/drift.txt" "PASS cached"
@@ -53,6 +54,7 @@ if [ $HAVE_UI = 1 ]; then
   fresh cr_guide; start cr_guide "tester:0000:Tester" && node "$T/signup-guide.ui.js" "$OUT" > "$OUT/guide.txt" 2>&1; stop
   grep -q "student sees the steps: false" "$OUT/guide.txt" && grep -q "JS errors: none" "$OUT/guide.txt" && echo "PASS  Owner-only sign-up steps" >> "$SUMMARY" || { echo "FAIL  Owner-only sign-up steps" >> "$SUMMARY"; sed 's/^/      /' "$OUT/guide.txt" | head -8 >> "$SUMMARY"; }
   fresh cr_lobbyui; start cr_lobbyui "tester:0000:Tester" && node "$T/lobby.ui.js" "$OUT" > "$OUT/lobbyui.txt" 2>&1; stop; record "Admin bar and lobby tools in the browser" "$OUT/lobbyui.txt"
+  fresh cr_profui; start cr_profui "tester:0000:Tester" && node "$T/profiles.ui.js" "$OUT" > "$OUT/profui.txt" 2>&1; stop; record "Artist profiles in the browser" "$OUT/profui.txt"
   fresh cr_sync; start cr_sync "$OWN" && node "$T/sync-owners.ui.js" "$OUT" > "$OUT/sync.txt" 2>&1; stop; record "Change check and two-owner sync" "$OUT/sync.txt"
 else echo "SKIP  Browser suites (Playwright not available)" >> "$SUMMARY"; fi
 n=$(grep -ciE "error|unhandled" "$OUT/server.log" 2>/dev/null); echo "INFO  Server log errors: ${n:-0}" >> "$SUMMARY"
