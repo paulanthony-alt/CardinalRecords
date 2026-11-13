@@ -234,7 +234,11 @@ function priceJob(game, body) {
   return { job: j, pricing, quantity, unitRate: j.unitRate, amount: j.unitRate * quantity };
 }
 
-async function createContract(game, buyer, body) {
+/**
+ * Make a rate-sheet offer. With `acceptedBy` (the job board), the artist already said
+ * yes by raising their hand, so the deal goes straight to the Record Owners for approval.
+ */
+async function createContract(game, buyer, body, { acceptedBy = null } = {}) {
   if (game.status !== 'active') fail('Deals can only be made while the season is live');
   const seller = await db.get("SELECT * FROM users WHERE id = ? AND role = 'player' AND game_id = ? AND active = 1", int(body.sellerId, 'Artist'), game.id);
   if (!seller) fail('That artist is not on this roster');
@@ -254,7 +258,49 @@ async function createContract(game, buyer, body) {
     await setEscrow(c, price.amount);
     await updateContract(c, {});
     await contractEvent(c.id, buyer.id, 'offered', terms, price.amount);
+    if (acceptedBy) {
+      await updateContract(c, { status: 'review' });
+      await contractEvent(c.id, acceptedBy, 'accept', 'Picked from the job board');
+    }
     return c.id;
+  });
+}
+
+// ---------- deadlines ----------
+/**
+ * When a deal is due: `due_days` after the label approved it (work starts at approval).
+ * Returns { dueAt, deliveredAt, overdue, late } (times in ms, or null).
+ */
+function deadline(c, events = []) {
+  if (!c.due_days || !c.approved_at) return { dueAt: null, deliveredAt: null, overdue: false, late: false };
+  const dueAt = Number(c.approved_at) + c.due_days * DAY;
+  const delivered = events.filter((e) => e.action === 'deliver' || e.action === 'complete').map((e) => Number(e.created_at)).sort((a, b) => a - b)[0] || null;
+  const overdue = c.status === 'active' && Date.now() > dueAt;
+  const late = delivered ? delivered > dueAt : overdue;
+  return { dueAt, deliveredAt: delivered, overdue, late };
+}
+
+// ---------- undo ----------
+/** Owner-made money moves that can be undone. */
+const REVERSIBLE = ['grant', 'fine'];
+/**
+ * Undo a payment or fine by adding the opposite entry, linked to the original, so the
+ * ledger keeps an honest record of both. Each entry can be undone once.
+ */
+async function reverseEntry(entryId, owner) {
+  return tx(async () => {
+    const e = await db.get('SELECT * FROM ledger WHERE id = ?', entryId);
+    if (!e) fail('That transaction is gone', 404);
+    if (!REVERSIBLE.includes(e.kind) || e.user_id == null) fail('Only label payments and fines can be undone. Deals are settled from the contract.');
+    if (e.reverses) fail("That's already an undo");
+    if (await db.get('SELECT 1 FROM ledger WHERE reverses = ?', e.id)) fail('That was already undone', 409);
+    const game = await getGame(e.game_id);
+    if (game.status === 'archived' || game.status === 'offloaded') fail('This season is archived');
+    const { id } = await db.run(
+      'INSERT INTO ledger (game_id, user_id, amount, kind, contract_id, memo, created_by, created_at, reverses) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      e.game_id, e.user_id, -e.amount, e.kind, e.contract_id, `Undone: ${e.memo || (e.kind === 'fine' ? 'fine' : 'payment')}`.slice(0, 200), owner.id, Date.now(), e.id
+    );
+    return { id, gameId: e.game_id };
   });
 }
 
@@ -378,5 +424,5 @@ module.exports = {
   DAY, MAX_DAYS, MAX_PLAYERS, OPEN_STATUSES, PUBLIC_STATUSES,
   hooks, HttpError, fail, str, int, httpUrl, profileUrl, isPin, isUsername, newClaimCode, tidyCode,
   post, getGame, clock, balanceOf, ledgerEntry, payAdvance, playerStats, levelInfo,
-  createContract, contractAction, nameOf, fmt$, sheetFor,
+  createContract, contractAction, nameOf, fmt$, sheetFor, deadline, priceJob, reverseEntry, REVERSIBLE,
 };

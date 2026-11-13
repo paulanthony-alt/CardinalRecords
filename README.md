@@ -47,6 +47,23 @@ Owners see a **Sign-up day steps** checklist at the top of Roster & PINs. It sho
 
 A season that was **never started** (a test, or a mistake) can be deleted from All seasons or Season settings by typing its name. This removes its signed artists and frees their usernames. Seasons that have been played go through archive, backup and offload instead.
 
+## Job board
+
+**Job Board** in the menu: an artist posts what they need, using the rate sheet: a job, hours/items or project rate, an optional deadline, and details. The lobby announces it. Labelmates **raise a hand**, with an optional note. The poster sees who and picks one, and it becomes a normal deal that both have agreed to, so it goes straight to the Record Owners' review queue. The money goes into escrow at that point, so the poster needs the cash then.
+
+Each artist can have up to 3 open requests. Others see how many hands are up, but not who. Owners see everything and can close any request. Moving an artist to another season closes their open requests.
+
+## Deal deadlines
+
+A deal's "due in X days" starts when the label approves it. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).
+
+## Owner tools
+
+- **Class mode** (Admin -> Class mode): one row per student with one-tap **Tardy**, **Absent**, **Volunteer** and **Studio assistant** buttons, using the rate sheet amounts. Today's taps are listed on each row, each with **Undo**.
+- **Undo a payment or fine:** any label payment or fine, from Class mode, Treasury or the ledger. It adds the opposite entry, linked to the original, so the record shows both. Each entry can be undone once; deal money and advances are settled from the contract instead.
+- **Paste a class list** (Roster & PINs): one student per line, with an optional role after a comma, or pasted from a spreadsheet. Usernames are suggested as first name + last initial + a number (`mariag14`), so they aren't full names; edit any of them, then sign everyone at once and print sign-up slips. It's all or nothing, and it respects the roster limit.
+- **Grading report** (PDF): a class summary page, then one page per student covering money, deals delivered on time or late, who they hired, fees and fines, music, profile, Release Guide progress, lobby activity and a teacher-notes box. Download it for the whole class from Roster & PINs, or for one student from their roster row or artist page.
+
 ## Artist profiles
 
 Each artist can add an **artist profile link** in their Profile: a Google Slides, Google Doc, Google Drive file or Google Site showing what they're great at. Only Google links are accepted (`docs.google.com`, `drive.google.com`, `sites.google.com`); `http://` becomes `https://`, and look-alike addresses are refused.

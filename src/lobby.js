@@ -19,6 +19,7 @@ const CATEGORIES = [
   ['join', 'New artists joining', ['join']],
   ['track', 'Music shared to the Showcase', ['track']],
   ['profile', 'Artist profiles shared', ['profile']],
+  ['request', 'Job board requests', ['request']],
   ['release', 'Release Guide finished', ['release']],
   ['phase', 'Season updates (start, end, music sharing)', ['phase']],
 ];

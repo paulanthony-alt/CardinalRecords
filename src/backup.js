@@ -63,21 +63,18 @@ async function seasonData(game) {
 }
 
 /**
- * Stream a PDF for these seasons into `out` (an HTTP response).
- * opts: { pins: include student PINs, by: who downloaded it, tz: the viewer's time zone }
+ * A PDF document with the house style: banner headings, striped tables that repeat their
+ * header across pages, and page footers. Shared by the backup and the grading report.
  */
-async function writeBackupPdf(out, games, opts = {}) {
-  const seasons = [];
-  for (const g of games) seasons.push(await seasonData(g));
-
+function pdfKit(out, { title, tz: wantTz } = {}) {
   let tz = 'UTC';
-  try { if (opts.tz) { new Intl.DateTimeFormat('en-US', { timeZone: opts.tz }); tz = opts.tz; } } catch {}
+  try { if (wantTz) { new Intl.DateTimeFormat('en-US', { timeZone: wantTz }); tz = wantTz; } } catch {}
   const dfmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric' });
   const dtfmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
   const date = (ms) => (ms ? dfmt.format(new Date(Number(ms))) : '');
   const generated = dtfmt.format(new Date());
 
-  const doc = new PDFDocument({ ...PAGE, bufferPages: true, info: { Title: 'Cardinal Records class records backup', Author: 'Cardinal Records' } });
+  const doc = new PDFDocument({ ...PAGE, bufferPages: true, info: { Title: title, Author: 'Cardinal Records' } });
   doc.pipe(out);
   const L = doc.page.margins.left;
   const W = doc.page.width - L - doc.page.margins.right;
@@ -141,6 +138,34 @@ async function writeBackupPdf(out, games, opts = {}) {
     doc.moveDown(0.8);
   };
   const negRed = (v) => (String(v).startsWith('-') ? RED : INK);
+
+  /** Footers on every page: `label(i)` names page i. Then closes the document. */
+  const finish = (label) => {
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      // Writing inside the bottom margin would make PDFKit start a new page, so lift it for the footer.
+      const margin = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      const y = doc.page.height - margin - 8;
+      doc.font('Helvetica').fontSize(7.5).fillColor(DIM)
+        .text(clean(label(i)), L, y, { width: W * 0.75, lineBreak: false })
+        .text(`Page ${i + 1} of ${range.count}`, L + W * 0.75, y, { width: W * 0.25, align: 'right', lineBreak: false });
+      doc.page.margins.bottom = margin;
+    }
+    doc.end();
+  };
+  return { doc, L, W, date, generated, pageSeason, newPage, ensure, banner, table, negRed, finish };
+}
+/**
+ * Stream a PDF for these seasons into `out` (an HTTP response).
+ * opts: { pins: include student PINs, by: who downloaded it, tz: the viewer's time zone }
+ */
+async function writeBackupPdf(out, games, opts = {}) {
+  const seasons = [];
+  for (const g of games) seasons.push(await seasonData(g));
+
+  const { doc, L, W, date, generated, pageSeason, newPage, ensure, banner, table, negRed, finish } = pdfKit(out, { title: 'Cardinal Records class records backup', tz: opts.tz });
 
   // ---------- title page ----------
   pageSeason[0] = null;
@@ -281,20 +306,126 @@ async function writeBackupPdf(out, games, opts = {}) {
     }
   }
 
-  // ---------- footers ----------
-  const range = doc.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(range.start + i);
-    // Writing inside the bottom margin would make PDFKit start a new page, so lift it for the footer.
-    const margin = doc.page.margins.bottom;
-    doc.page.margins.bottom = 0;
-    const y = doc.page.height - margin - 8;
-    doc.font('Helvetica').fontSize(7.5).fillColor(DIM)
-      .text(clean(`Cardinal Records backup - ${pageSeason[i] || 'Contents'} - generated ${generated}`), L, y, { width: W * 0.75, lineBreak: false })
-      .text(`Page ${i + 1} of ${range.count}`, L + W * 0.75, y, { width: W * 0.25, align: 'right', lineBreak: false });
-    doc.page.margins.bottom = margin;
-  }
-  doc.end();
+  finish((i) => `Cardinal Records backup - ${pageSeason[i] || 'Contents'} - generated ${generated}`);
 }
 
-module.exports = { writeBackupPdf };
+// ---------- grading report ----------
+// How many Release Guide steps there are (the guide lives in the client's public/guide.js).
+let GUIDE_STEPS = null;
+function guideSteps() {
+  if (GUIDE_STEPS == null) {
+    try {
+      const sandbox = { window: {} };
+      require('node:vm').runInNewContext(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'public', 'guide.js'), 'utf8'), sandbox);
+      GUIDE_STEPS = sandbox.window.RELEASE_GUIDE.map((s) => s.id);
+    } catch { GUIDE_STEPS = []; }
+  }
+  return GUIDE_STEPS;
+}
+
+/**
+ * A one-page-per-student grading report: the numbers, the work they delivered (on time
+ * or late), who they hired, fees and fines, music, profile and Release Guide progress,
+ * with space for the teacher's notes. Whole class, or one student with `playerId`.
+ */
+async function writeReportPdf(out, game, opts = {}) {
+  const s = await seasonData(game);
+  const kit = pdfKit(out, { title: `Cardinal Records grading report: ${game.name}`, tz: opts.tz });
+  const { doc, L, W, date, generated, pageSeason, newPage, ensure, banner, table, negRed, finish } = kit;
+  const nm = (id) => (id == null ? 'Label vault' : s.names.get(id) || `#${id}`);
+  const events = new Map();
+  for (const e of await db.all('SELECT e.* FROM contract_events e JOIN contracts c ON c.id = e.contract_id WHERE c.game_id = ? ORDER BY e.id', game.id)) {
+    if (!events.has(e.contract_id)) events.set(e.contract_id, []);
+    events.get(e.contract_id).push(e);
+  }
+  const chats = new Map((await db.all("SELECT actor_id AS k, COUNT(*) AS n FROM feed WHERE game_id = ? AND kind = 'chat' GROUP BY actor_id", game.id)).map((r) => [r.k, r.n]));
+  const steps = guideSteps();
+  const jobName = (c) => s.sheet.jobs.find((j) => j.id === c.job_id)?.name || c.title;
+  const KIND = { advance: 'Signing advance', grant: 'Label payment', bonus: 'Game bonus', fine: 'Fee / fine' };
+  let students = s.stats;
+  if (opts.playerId) students = students.filter((r) => r.player.id === opts.playerId);
+
+  const cardFor = (r) => {
+    const p = r.player;
+    const sold = s.contracts.filter((c) => c.seller_id === p.id);
+    const bought = s.contracts.filter((c) => c.buyer_id === p.id);
+    const withDue = sold.filter((c) => c.due_days && c.approved_at && ['delivered', 'completed'].includes(c.status));
+    const late = withDue.filter((c) => G.deadline(c, events.get(c.id) || []).late);
+    const overdue = sold.filter((c) => G.deadline(c, events.get(c.id) || []).overdue);
+    const mine = s.ledger.filter((l) => l.user_id === p.id);
+    const sum = (kinds) => mine.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amount, 0);
+    const tracks = s.tracks.filter((t) => t.user_id === p.id);
+    const done = Object.keys(r.tutorial?.done || {}).filter((k) => steps.includes(k)).length;
+    return { p, sold, bought, withDue, late, overdue, mine, tracks, done,
+      payments: sum(['grant', 'bonus']), fines: -sum(['fine']), chats: chats.get(p.id) || 0 };
+  };
+  const cards = students.map(cardFor);
+
+  // ---------- cover: the whole class at a glance ----------
+  pageSeason[0] = game.name;
+  doc.rect(0, 0, doc.page.width, 110).fill('#a8132b');
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(24).text('GRADING REPORT', L, 38);
+  doc.font('Helvetica').fontSize(12).text(clean(`${game.name}${opts.playerId && cards[0] ? `: ${cards[0].p.display_name}` : ''}`), L, 70);
+  doc.y = 132;
+  doc.fillColor('#1a1a1a').font('Helvetica').fontSize(9.5).text(clean(
+    `Generated ${generated}${opts.by ? ` by ${opts.by}` : ''}. ${game.started_at ? `Season started ${date(game.started_at)}, day ${s.clock.day} of ${s.clock.totalDays}.` : 'Season not started yet.'} ` +
+    'Each student has their own page: the numbers, the work they delivered (on time or late), who they hired, fees and fines, their music, profile and Release Guide progress, and space for your notes.'), L, doc.y, { width: W });
+  doc.moveDown(0.6);
+  doc.font('Helvetica-Bold').fillColor('#a8132b').fontSize(9).text('PRIVATE: student records. Store securely.', L, doc.y, { width: W });
+  doc.moveDown(0.8);
+  table([
+    { h: 'Artist', w: 20, bold: true }, { h: 'Cash', w: 9, align: 'right', color: negRed }, { h: 'Net worth', w: 10, align: 'right', color: negRed },
+    { h: 'Earned', w: 9, align: 'right' }, { h: 'Fines', w: 8, align: 'right' }, { h: 'Delivered', w: 9, align: 'right' }, { h: 'Late', w: 6, align: 'right' },
+    { h: 'Hired', w: 7, align: 'right' }, { h: 'Rating', w: 7, align: 'right' }, { h: 'Tracks', w: 7, align: 'right' }, { h: 'Guide', w: 8, align: 'right' },
+  ], cards.map((c) => {
+    const st = s.stats.find((x) => x.player.id === c.p.id).stats;
+    return [c.p.display_name, money(st.balance), money(st.netWorth), money(st.earned), money(c.fines), String(st.dealsSold), String(c.late.length),
+      String(st.dealsBought), st.rating ? `${st.rating}/5` : '-', String(c.tracks.length), `${c.done}/${steps.length || '?'}`];
+  }), game.name);
+
+  // ---------- one page per student ----------
+  for (const c of cards) {
+    const r = s.stats.find((x) => x.player.id === c.p.id);
+    const st = r.stats;
+    newPage(game.name);
+    banner(`${c.p.display_name}`, `@${c.p.username} - ${c.p.role_title || 'Artist'} - ${game.name} - Level ${r.progress.level} ${r.progress.title}${c.p.active ? '' : ' - removed from roster'}`);
+    table([{ h: 'Money', w: 30, bold: true }, { h: '', w: 20, align: 'right' }, { h: 'Work', w: 30, bold: true }, { h: '', w: 20, align: 'right' }], [
+      ['Cash now', money(st.balance), 'Deals delivered (as the artist)', String(st.dealsSold)],
+      ['Net worth (cash + escrow)', money(st.netWorth), 'Delivered on time (with a deadline)', c.withDue.length ? `${c.withDue.length - c.late.length} of ${c.withDue.length}` : 'No deadlines'],
+      ['Earned from deals', money(st.earned), 'Delivered late', String(c.late.length)],
+      ['Spent hiring labelmates', money(st.spent), 'Overdue right now', String(c.overdue.length)],
+      ['Label payments and bonuses', money(c.payments), 'Artists hired', String(st.dealsBought)],
+      ['Fees and fines', c.fines ? `-${money(c.fines)}` : money(0), 'Average rating from clients', st.rating ? `${st.rating} / 5` : 'No ratings yet'],
+      ['Showcase tracks / likes', `${c.tracks.length} / ${st.likes}`, 'Release Guide', `${c.done} of ${steps.length} steps${r.tutorial?.completedAt ? ' (finished)' : ''}`],
+      ['Lobby messages posted', String(c.chats), 'Badges', r.badges.map((b) => b.name).join(', ') || 'None yet'],
+    ], game.name, { size: 8.5 });
+    if (c.p.profile_url) { doc.font('Helvetica').fontSize(8.5).fillColor('#1a1a1a').text(clean(`Artist profile: ${c.p.profile_url}`), L, doc.y, { width: W }); doc.moveDown(0.6); }
+
+    ensure(50, game.name);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text('Work delivered as the artist', L, doc.y); doc.moveDown(0.25);
+    table([{ h: 'No.', w: 9 }, { h: 'Job', w: 22, bold: true }, { h: 'Client', w: 17 }, { h: 'Amount', w: 10, align: 'right' }, { h: 'Status', w: 11 }, { h: 'Due', w: 13 }, { h: 'Delivery', w: 18 }],
+      c.sold.map((k) => {
+        const d = G.deadline(k, events.get(k.id) || []);
+        const delivery = d.deliveredAt ? `${date(d.deliveredAt)}${d.dueAt ? (d.late ? ' (late)' : ' (on time)') : ''}` : d.overdue ? 'OVERDUE' : '';
+        return [`CR-${String(k.id).padStart(4, '0')}`, jobName(k), nm(k.buyer_id), money(k.amount), k.status, d.dueAt ? date(d.dueAt) : '', delivery];
+      }), game.name, { size: 7.5 });
+    ensure(50, game.name);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text('Artists they hired', L, doc.y); doc.moveDown(0.25);
+    table([{ h: 'No.', w: 9 }, { h: 'Job', w: 25, bold: true }, { h: 'Artist', w: 20 }, { h: 'Amount', w: 12, align: 'right' }, { h: 'Status', w: 14 }, { h: 'Rating given', w: 20 }],
+      c.bought.map((k) => [`CR-${String(k.id).padStart(4, '0')}`, jobName(k), nm(k.seller_id), money(k.amount), k.status, k.rating ? `${k.rating}/5` : '']), game.name, { size: 7.5 });
+    ensure(50, game.name);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text('Advance, label payments, fees and fines', L, doc.y); doc.moveDown(0.25);
+    table([{ h: 'Date', w: 14 }, { h: 'Type', w: 16 }, { h: 'Memo', w: 54 }, { h: 'Amount', w: 16, align: 'right', color: negRed }],
+      c.mine.filter((l) => KIND[l.kind]).map((l) => [date(l.created_at), KIND[l.kind], l.memo, `${l.amount >= 0 ? '+' : ''}${money(l.amount)}`]), game.name, { size: 7.5 });
+    ensure(90, game.name);
+    const y = doc.y + 2;
+    doc.rect(L, y, W, 80).lineWidth(0.8).strokeColor('#c9a227').stroke();
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#a8132b').text('TEACHER NOTES / GRADE', L + 8, y + 7);
+    for (let i = 1; i <= 3; i++) doc.moveTo(L + 8, y + 18 + i * 18).lineTo(L + W - 8, y + 18 + i * 18).lineWidth(0.4).strokeColor('#d9d8d0').stroke();
+    doc.y = y + 88;
+  }
+  if (!cards.length) { doc.font('Helvetica-Oblique').fontSize(10).fillColor('#5f5d57').text('No artists on this roster yet.', L, doc.y); }
+  finish((i) => `Cardinal Records grading report - ${pageSeason[i] || game.name} - generated ${generated}`);
+}
+
+module.exports = { writeBackupPdf, writeReportPdf };
