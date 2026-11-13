@@ -101,6 +101,10 @@ function platformOf(url) {
 }
 const listenAttrs = (t) => `href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" data-listen="${t.id}"`;
 const uploadsOpen = () => !!game()?.uploads_open && game().status !== 'archived';
+/** Students only see the Release Guide once a Record Owner opens it (owners can always preview it). */
+const guideOpen = () => isOwner() || !!game()?.guide_open;
+const guideToggle = (cls = '') => (isOwner() && game()
+  ? `<button class="btn ${cls}" data-act="guide-toggle" data-open="${game().guide_open ? 0 : 1}">${icon(game().guide_open ? 'lock' : 'map')}${game().guide_open ? 'Close the Release Guide' : 'Open the Release Guide'}</button>` : '');
 const uploadToggle = (cls = '') => (isOwner() && game().status !== 'archived'
   ? `<button class="btn ${cls}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}">${icon(uploadsOpen() ? 'lock' : 'music')}${uploadsOpen() ? 'Close music sharing' : 'Open music sharing'}</button>` : '');
 
@@ -443,7 +447,7 @@ function navItems() {
     { to: 'charts', label: 'Charts', ic: 'chart' },
     { group: 'Season Finale' },
     { to: 'showcase', label: 'Showcase', ic: 'music' },
-    { to: 'guide', label: 'Release Guide', ic: 'map' },
+    ...(guideOpen() ? [{ to: 'guide', label: 'Release Guide', ic: 'map' }] : []),
     { group: 'You' },
     { to: 'data', label: 'Data', ic: 'download' },
     { to: 'profile', label: 'Profile', ic: 'user' },
@@ -466,7 +470,7 @@ function taskAction() {
   if (n) return [`Your move (${n})`, '#/contracts'];
   if (uploadsOpen() && !me()?.stats.tracks) return ['Share your music', null, 'upload'];
   if (live()) return ['Hire someone', '#/rates'];
-  if (['showcase', 'archived'].includes(st.game.status)) return ['Release Guide', '#/guide'];
+  if (['showcase', 'archived'].includes(st.game.status) && guideOpen()) return ['Release Guide', '#/guide'];
   return ['Rate Sheet', '#/rates'];
 }
 
@@ -507,6 +511,7 @@ function adminBar(route) {
     <span class="ab-season"><b>${esc(g.name)}</b> <span class="ab-phase">${phaseLabel[g.status]}</span></span>
     <label class="ab-ctl">Lobby <select data-change="lobby-chat" aria-label="Lobby chat setting">${Object.entries(CHAT_LABEL).map(([k, v]) => `<option value="${k}" ${L.chat === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     ${g.status !== 'archived' ? `<button class="ab-ctl ab-toggle ${uploadsOpen() ? 'on' : ''}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}" title="Music sharing">${icon('music')}Music ${uploadsOpen() ? 'open' : 'closed'}</button>` : ''}
+    <button class="ab-ctl ab-toggle ${g.guide_open ? 'on' : ''}" data-act="guide-toggle" data-open="${g.guide_open ? 0 : 1}" title="Release Guide for students">${icon('map')}Guide ${g.guide_open ? 'open' : 'hidden'}</button>
     ${item('#/admin/review', 'Review', review, review > 0)}
     ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
     ${challengesToJudge().length ? item('#/challenges', 'To judge', challengesToJudge().length, true) : ''}
@@ -575,7 +580,7 @@ function phaseBanner() {
   if (g.status === 'showcase') {
     const tracks = m ? m.stats.tracks : 0;
     return `<div class="banner purple">${icon('music')}<div><b>Music sharing is open</b><p>${m ? (tracks ? `You've shared ${plural(tracks, 'track')}. Next: get it on streaming services.` : 'Share a link to the music you made this season so your labelmates can listen.') : 'Artists are sharing their music now.'}</p></div>
-      <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Share your music</button>' : ''}${m && tracks ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
+      <div class="actions">${uploadToggle()}${m && !tracks ? '<button class="btn primary" data-act="upload">Share your music</button>' : ''}${m && tracks && guideOpen() ? `<button class="btn primary" data-act="guide-modal">${m.stats.released ? 'Review' : 'Open'} Release Guide</button>` : ''}<a class="btn" href="#/showcase">Listen</a></div></div>`;
   }
   if (g.status === 'archived') return `<div class="banner grey">${icon('lock')}<div><b>This season is archived</b><p>Everything is read-only now. You can still listen to the Showcase and download all the data.</p></div><div class="actions"><a class="btn" href="#/data">Download data</a></div></div>`;
   return '';
@@ -944,7 +949,7 @@ function showcaseView() {
         <p>At the end of the season, once a Record Owner opens music sharing, every artist shares a link to the music they made here (Spotify, SoundCloud, YouTube…) and the whole label listens. Then you'll get a step-by-step guide to releasing it on streaming services.</p>
         <div class="countdown"><div><b>${left}</b><small>Days to go</small></div><div><b>${g.status === 'setup' ? 0 : g.clock.day}</b><small>Current day</small></div><div><b>${g.duration_days}</b><small>Season length</small></div></div>
         <p class="dim">Use the season to build your track: hire producers, writers, singers and engineers from the Marketplace.</p>
-        <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">${uploadToggle()}<a class="btn" href="#/guide">Preview the Release Guide</a></div></div>`;
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">${uploadToggle()}${guideOpen() ? '<a class="btn" href="#/guide">Preview the Release Guide</a>' : ''}</div></div>`;
   }
   const tracks = S.state.tracks;
   const canUpload = m && uploadsOpen();
@@ -1005,7 +1010,14 @@ function guideHtml(inModal) {
     </div></div>`;
 }
 function guideView() {
-  return `${pageHead('Season Finale', 'Release Guide', 'Your step-by-step path from finished song to Spotify, Apple Music and every other streaming service.')}${guideHtml(false)}`;
+  if (!guideOpen()) {
+    return `${pageHead('Season Finale', 'Release Guide')}
+      <div class="card lock"><div class="big">${icon('lock')}</div><h2>The Release Guide isn't open yet</h2>
+        <p>It's a step-by-step path from your finished song to Spotify, Apple Music and every other streaming service. A Record Owner will open it when it's time.</p></div>`;
+  }
+  const ownerNote = isOwner() ? `<div class="banner ${game().guide_open ? '' : 'grey'}">${icon(game().guide_open ? 'map' : 'lock')}<div><b>${game().guide_open ? 'Students can see the Release Guide' : "Students can't see the Release Guide yet"}</b>
+    <p>${game().guide_open ? "It's in their menu, and they can check off steps." : 'You are previewing it. Open it when you want students to start releasing their music.'}</p></div><div class="actions">${guideToggle(game().guide_open ? '' : 'primary')}</div></div>` : '';
+  return `${ownerNote}${pageHead('Season Finale', 'Release Guide', 'Your step-by-step path from finished song to Spotify, Apple Music and every other streaming service.')}${guideHtml(false)}`;
 }
 function openGuideModal() {
   modal(`${modalHead('Release Guide')}<div id="guide-wrap">${guideHtml(true)}</div>`, { wide: true });
@@ -1225,6 +1237,9 @@ function adminView(tab) {
       <div class="card"><div class="card-head"><h3>${icon('music')}Music sharing</h3><span class="status ${uploadsOpen() ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${uploadsOpen() ? 'Open' : 'Closed'}</span></div>
         <p class="muted">${uploadsOpen() ? 'Artists can share links (Spotify, SoundCloud, YouTube…) to their tracks in the Showcase right now.' : "Artists can't share music until you open music sharing. Ending the season does not open it automatically."}</p>
         ${g.status === 'archived' ? '<p class="dim">Reopen the Showcase to change this.</p>' : uploadToggle(uploadsOpen() ? '' : 'primary')}</div>
+      <div class="card"><div class="card-head"><h3>${icon('map')}Release Guide</h3><span class="status ${g.guide_open ? 's-completed' : 's-cancelled'}" style="margin-left:auto">${g.guide_open ? 'Open' : 'Hidden'}</span></div>
+        <p class="muted">${g.guide_open ? 'Students can see the Release Guide and check off the steps to release their music.' : "Students can't see the Release Guide until you open it. You can <a href=\"#/guide\">preview it</a>."}</p>
+        ${guideToggle(g.guide_open ? '' : 'primary')}</div>
       <div class="card"><div class="card-head"><h3>${icon('edit')}Season settings</h3></div>${seasonForm(g, 'settings')}</div>`;
   }
   const label = ADMIN_TABS.find(([k]) => k === t)?.[1];
@@ -1662,6 +1677,7 @@ async function shareTrack(d) {
   closeModal();
   toast('Your track is live in the Showcase!', 'gold', 'music');
   confetti();
+  if (!guideOpen()) return;
   S.ui.guideStep = null;
   openGuideModal();
 }
@@ -1895,7 +1911,13 @@ const ACTIONS = {
   'delete-track': (el) => confirmModal('Delete this track?', 'It will be removed from the Showcase for everyone.', 'Delete', 'danger', () => {
     return act(() => api('DELETE', `/api/tracks/${el.dataset.id}`), 'Track deleted');
   }),
-  'guide-modal': () => { S.ui.guideStep = null; openGuideModal(); },
+  'guide-modal': () => { if (!guideOpen()) return toast("The Release Guide isn't open yet", 'err'); S.ui.guideStep = null; openGuideModal(); },
+  'guide-toggle': (el) => {
+    const open = el.dataset.open === '1';
+    confirmModal(open ? 'Open the Release Guide?' : 'Close the Release Guide?',
+      open ? 'Students will see it in their menu and can check off the steps. The lobby will announce it.' : 'Students will no longer see it. Their progress is kept.',
+      open ? 'Open it' : 'Close it', open ? 'primary' : 'danger', () => act(() => api('POST', `/api/games/${S.gameId}/guide`, { open }), open ? 'Release Guide opened' : 'Release Guide closed'));
+  },
   'guide-go': (el) => { S.ui.guideStep = Math.max(0, Number(el.dataset.i)); rerenderGuide(); },
   'guide-next': async () => {
     const step = GUIDE[S.ui.guideStep];

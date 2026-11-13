@@ -159,6 +159,9 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 ALTER TABLE ledger ADD COLUMN IF NOT EXISTS reverses INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_reverses ON ledger(reverses) WHERE reverses IS NOT NULL;
 
+-- Release Guide: hidden from students until a Record Owner opens it (per season).
+ALTER TABLE games ADD COLUMN IF NOT EXISTS guide_open INTEGER NOT NULL DEFAULT 0;
+
 -- Studio challenges: owners set a challenge for any date range (from / to) with prizes;
 -- artists submit a link while it's open; owners pick 1st-3rd and prizes pay out.
 CREATE TABLE IF NOT EXISTS challenges (

@@ -47,6 +47,12 @@ Owners see a **Sign-up day steps** checklist at the top of Roster & PINs. It sho
 
 A season that was **never started** (a test, or a mistake) can be deleted from All seasons or Season settings by typing its name. This removes its signed artists and frees their usernames. Seasons that have been played go through archive, backup and offload instead.
 
+## Release Guide (hidden until opened)
+
+The Release Guide (ten steps from a finished song to streaming services) is **hidden from students until a Record Owner opens it**, separately for each season. Owners open or close it from **Season settings**, the **Guide** switch in the admin bar, or the guide page itself, and the lobby announces it when it opens.
+
+While it's hidden, students don't see it in the menu, on their home page or in the Showcase. The guide page says it isn't open yet, and progress can't be saved. Owners can always preview it. Closing it again keeps students' progress.
+
 ## Job board
 
 **Job Board** in the menu: an artist posts what they need, using the rate sheet: a job, hours/items or project rate, an optional deadline, and details. The lobby announces it. Labelmates **raise a hand**, with an optional note. The poster sees who and picks one, and it becomes a normal deal that both have agreed to, so it goes straight to the Record Owners' review queue. The money goes into escrow at that point, so the poster needs the cash then.
