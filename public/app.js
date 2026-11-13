@@ -441,6 +441,7 @@ function navItems() {
     { to: 'rates', label: 'Rate Sheet', ic: 'dollar' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'jobs', label: 'Job Board', ic: 'bag', count: myRequestsWithHands() },
+    { to: 'challenges', label: 'Challenges', ic: 'award', count: challengesToEnter() },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
     { group: 'Season Finale' },
@@ -511,6 +512,7 @@ function adminBar(route) {
     ${g.status !== 'archived' ? `<button class="ab-ctl ab-toggle ${uploadsOpen() ? 'on' : ''}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}" title="Music sharing">${icon('music')}Music ${uploadsOpen() ? 'open' : 'closed'}</button>` : ''}
     ${item('#/admin/review', 'Review', review, review > 0)}
     ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
+    ${challengesToJudge().length ? item('#/challenges', 'To judge', challengesToJudge().length, true) : ''}
     ${item('#/admin/lobby', 'Hidden posts', hidden)}
     ${item('#/admin/lobby', 'Muted', muted)}
     ${unclaimed ? item('#/admin/roster', 'Not signed in', unclaimed, true) : ''}
@@ -693,7 +695,7 @@ function profilesSection() {
   </div>`;
 }
 
-const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award', profile: 'user' };
+const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award', profile: 'user', request: 'bag', challenge: 'award' };
 /** Owner-only buttons on a lobby post: hide/show, pin, delete, and mute the student who wrote it. */
 function modTools(f) {
   if (!isOwner()) return '';
@@ -1292,6 +1294,106 @@ function classModeView() {
     <p class="dim" style="font-size:12.5px;margin-top:10px">Other fees, custom amounts and charging several students at once are in <a href="#/admin/treasury">Treasury &amp; fines</a>. Overdue deals: ${overdueDeals().length ? `<a href="#/admin/review">${plural(overdueDeals().length, 'deal')}</a>` : 'none'}.</p></div>`;
 }
 
+// ---------- studio challenges ----------
+/** Where a challenge is right now, worked out from its dates (they pass without anyone clicking). */
+function challengePhase(c, now = Date.now()) {
+  if (c.status === 'cancelled') return 'cancelled';
+  if (c.status === 'judged') return 'judged';
+  if (now < c.startsAt) return 'upcoming';
+  if (now < c.endsAt) return 'open';
+  return 'judging';
+}
+const challengesToEnter = () => (me() ? (S.state?.challenges || []).filter((c) => challengePhase(c) === 'open' && !c.entries.some((x) => x.userId === S.user.id)).length : 0);
+const challengesToJudge = () => (S.state?.challenges || []).filter((c) => challengePhase(c) === 'judging');
+const PLACE = ['1st', '2nd', '3rd'];
+const entriesText = (n) => `${n} ${n === 1 ? 'entry' : 'entries'}`;
+const MEDAL = ['🥇', '🥈', '🥉'];
+const dayStr = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+/** yyyy-mm-dd in the viewer's own time zone, for date inputs. */
+const ymd = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+function challengeCard(c) {
+  const ph = challengePhase(c);
+  const m = me();
+  const mine = c.entries.find((x) => x.userId === S.user.id);
+  const left = Math.ceil((c.endsAt - Date.now()) / 86_400_000);
+  const chip = {
+    upcoming: `<span class="chip s-offered">Starts ${dayStr(c.startsAt)}</span>`,
+    open: `<span class="chip s-active">Open · ${left <= 1 ? 'ends today' : `${left} days left`}</span>`,
+    judging: '<span class="chip s-review">Ended · picking winners</span>',
+    judged: '<span class="chip s-completed">Winners announced</span>',
+    cancelled: '<span class="chip s-cancelled">Cancelled</span>',
+  }[ph];
+  const prizes = c.prizes.map((p, i) => `<span class="prize">${MEDAL[i]} ${PLACE[i]} <b class="mono">${money(p)}</b></span>`).join('');
+  const entries = [...c.entries].sort((a, b) => (a.place || 9) - (b.place || 9) || a.at - b.at);
+  const entryList = entries.length ? `<div class="entries">${entries.map((x) => `<div class="entry ${x.place ? 'won' : ''}">
+      ${x.place ? `<span class="medal" title="${PLACE[x.place - 1]} place">${MEDAL[x.place - 1]}</span>` : ''}${nameLine(x.userId)}
+      ${x.note ? `<span class="dim entry-note">“${esc(x.note)}”</span>` : ''}
+      <a class="btn xs" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${icon('external')}Open entry</a></div>`).join('')}</div>` : '';
+  let body = '';
+  if (isOwner()) {
+    body = c.entries.length ? entryList : `<p class="dim">${ph === 'upcoming' ? 'Entries open on the start date.' : 'No entries yet.'}</p>`;
+  } else if (ph === 'open' && m) {
+    body = `<form class="entry-form" data-form="challenge-entry"><input type="hidden" name="id" value="${c.id}" />
+      <div class="row"><label class="field"><span>Your entry (a link)</span><input name="url" type="url" inputmode="url" maxlength="500" required value="${esc(mine?.url || '')}" placeholder="https://soundcloud.com/… or a Google Drive link" /></label>
+      <label class="field"><span>Note (optional)</span><input name="note" maxlength="500" value="${esc(mine?.note || '')}" placeholder="What you made" /></label></div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><button class="btn primary">${icon(mine ? 'check' : 'upload')}${mine ? 'Update my entry' : 'Submit my entry'}</button>
+      ${mine ? `<button type="button" class="btn ghost" data-act="entry-withdraw" data-id="${c.id}">Withdraw</button><span class="dim" style="font-size:12.5px">Entered. You can change it until ${dayStr(c.endsAt)}.</span>` : `<span class="dim" style="font-size:12.5px">Other entries stay hidden until it ends.</span>`}</div></form>`;
+  } else if (ph === 'upcoming') {
+    body = `<p class="dim">Entries open ${dayStr(c.startsAt)}.</p>`;
+  } else if (['judging', 'judged'].includes(ph)) {
+    body = `${ph === 'judging' ? `<p class="dim">${entriesText(c.entryCount)}. The Record Owners are picking the winners.</p>` : ''}${entryList}`;
+  }
+  const own = isOwner() ? [
+    ph === 'judging' && c.entries.length ? `<button class="btn sm primary" data-act="challenge-winners" data-id="${c.id}">${icon('award')}Pick winners</button>` : '',
+    ['upcoming', 'open', 'judging'].includes(ph) ? `<button class="btn sm" data-act="challenge-edit" data-id="${c.id}">${icon('edit')}Edit</button>` : '',
+    ph === 'open' ? `<button class="btn sm" data-act="challenge-end" data-id="${c.id}">End now</button>` : '',
+    ['upcoming', 'open', 'judging'].includes(ph) ? `<button class="btn sm ghost" data-act="challenge-cancel" data-id="${c.id}">Cancel</button>` : '',
+  ].join('') : '';
+  return `<div class="challenge ph-${ph}"><div class="ch-head"><div style="flex:1;min-width:0"><h3>${esc(c.title)}</h3>
+      <div class="ch-dates">${icon('clock')}${dayStr(c.startsAt)} – ${dayStr(c.endsAt)} · ${entriesText(c.entryCount)}</div></div>${chip}</div>
+    ${prizes ? `<div class="prizes">${prizes}</div>` : ''}
+    ${c.description ? `<p class="ch-desc">${esc(c.description)}</p>` : ''}
+    ${body}${own ? `<div class="c-actions">${own}</div>` : ''}</div>`;
+}
+
+function challengesView() {
+  const all = S.state.challenges;
+  const group = (phs) => all.filter((c) => phs.includes(challengePhase(c)));
+  const open = group(['open']); const soon = group(['upcoming']); const judging = group(['judging']); const past = group(['judged', 'cancelled']);
+  const sec = (title, ic, list, emptyText) => (list.length || emptyText ? `<div class="card"><div class="card-head"><h3>${icon(ic)}${title}</h3><span class="more">${list.length}</span></div>
+    ${list.length ? `<div class="challenges">${list.map(challengeCard).join('')}</div>` : `<p class="muted">${emptyText}</p>`}</div>` : '');
+  return `${pageHead('The Label', 'Studio Challenges', 'Challenges set by the Record Owners, with prizes. Submit a link to your entry while a challenge is open; winners are paid when it ends.',
+    isOwner() && game().status !== 'archived' ? `<button class="btn primary" data-act="challenge-new">${icon('plus')}New challenge</button>` : '')}
+    ${isOwner() && judging.length ? sec('Ended: pick the winners', 'award', judging) : ''}
+    ${sec('Open now', 'zap', open, isOwner() ? 'No challenge is open right now. Start one with New challenge.' : 'No challenge is open right now. Check back soon!')}
+    ${sec('Coming up', 'clock', soon)}
+    ${!isOwner() && judging.length ? sec('Ended', 'award', judging) : ''}
+    ${sec('Past challenges', 'flag', past.slice(0, 20))}`;
+}
+
+/** Owners: create or edit a challenge, with the date range they choose. */
+function challengeModal(c = null) {
+  const today = ymd(Date.now());
+  const inAWeek = ymd(Date.now() + 6 * 86_400_000);
+  const p = c?.prizes || [100, null, null];
+  modal(`${modalHead(c ? 'Edit challenge' : 'New studio challenge', 'Pick any dates: it opens at the start of the first day and closes at the end of the last day (your time).')}
+    <form data-form="challenge">${c ? `<input type="hidden" name="id" value="${c.id}" />` : ''}
+      <label class="field"><span>Title</span><input name="title" required minlength="3" maxlength="80" value="${esc(c?.title || '')}" placeholder="Best 8-bar hook" /></label>
+      <label class="field"><span>What to make</span><textarea name="description" maxlength="1000" placeholder="Write and record an 8-bar hook over any beat. Share a SoundCloud or Google Drive link.">${esc(c?.description || '')}</textarea></label>
+      <div class="row">
+        <label class="field"><span>From</span><input name="from" type="date" required value="${c ? ymd(c.startsAt) : today}" /></label>
+        <label class="field"><span>To</span><input name="to" type="date" required value="${c ? ymd(c.endsAt) : inAWeek}" /></label>
+      </div>
+      <div class="row">
+        <label class="field"><span>1st prize ($)</span><input name="p1" type="number" min="0" max="100000" step="1" required value="${p[0] ?? ''}" /></label>
+        <label class="field"><span>2nd prize ($, optional)</span><input name="p2" type="number" min="0" max="100000" step="1" value="${p[1] ?? ''}" /></label>
+        <label class="field"><span>3rd prize ($, optional)</span><input name="p3" type="number" min="0" max="100000" step="1" value="${p[2] ?? ''}" /></label>
+      </div>
+      <p class="dim" style="font-size:12.5px">Students submit a link (SoundCloud, YouTube, Google Drive…). Other students only see the entries once it ends. Prizes are paid from the label when you pick the winners.</p>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('check')}${c ? 'Save' : 'Create challenge'}</button></div></form>`, { wide: true });
+}
+
 // ---------- job board ----------
 /** My open requests that have hands raised (shown as a count on the Job Board menu item). */
 const myRequestsWithHands = () => (S.state?.requests || []).filter((q) => q.userId === S.user?.id && q.status === 'open' && q.applicantCount).length;
@@ -1593,6 +1695,7 @@ function viewFor() {
     case 'market': return ratesView();
     case 'contracts': return contractsView();
     case 'jobs': return jobsView();
+    case 'challenges': return challengesView();
     case 'contract': return contractDetailView(id);
     case 'roster': return rosterView();
     case 'artist': return artistView(id);
@@ -1702,6 +1805,23 @@ const ACTIONS = {
   'paste-roster': () => pasteRosterModal(),
   // 2. job board
   'request-new': () => hireModal({ request: true }),
+  'challenge-new': () => challengeModal(),
+  'challenge-edit': (el) => challengeModal(S.state.challenges.find((c) => c.id === Number(el.dataset.id))),
+  'challenge-end': (el) => confirmModal('End this challenge now?', 'Entries close right away, and you can pick the winners.', 'End now', 'primary',
+    () => act(() => api('POST', `/api/challenges/${el.dataset.id}/end`), 'Challenge ended. Pick the winners.')),
+  'challenge-cancel': (el) => confirmModal('Cancel this challenge?', 'No prizes are paid. Entries are kept in the records.', 'Cancel challenge', 'danger',
+    () => act(() => api('POST', `/api/challenges/${el.dataset.id}/cancel`), 'Challenge cancelled')),
+  'entry-withdraw': (el) => confirmModal('Withdraw your entry?', 'You can enter again while the challenge is open.', 'Withdraw', 'danger',
+    () => act(() => api('DELETE', `/api/challenges/${el.dataset.id}/entry`), 'Entry withdrawn')),
+  'challenge-winners': (el) => {
+    const c = S.state.challenges.find((x) => x.id === Number(el.dataset.id));
+    const opts = c.entries.map((x) => `<option value="${x.userId}">${esc(nameOf(x.userId))}</option>`).join('');
+    const places = Math.min(Math.max(1, c.prizes.length), c.entries.length);
+    modal(`${modalHead(`Winners: ${esc(c.title)}`, 'Prizes are paid as soon as you confirm, and the lobby hears about it.')}
+      <form data-form="challenge-winners"><input type="hidden" name="id" value="${c.id}" />
+        ${Array.from({ length: places }, (_, i) => `<label class="field"><span>${MEDAL[i]} ${PLACE[i]} place · ${money(c.prizes[i] || 0)}</span><select name="w${i}" ${i === 0 ? 'required' : ''}>${i === 0 ? '' : '<option value="">(nobody)</option>'}${opts}</select></label>`).join('')}
+        <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('award')}Announce winners</button></div></form>`);
+  },
   'request-apply': (el) => modal(`${modalHead('Raise your hand', 'The artist who posted this sees your name and note, and picks who to work with.')}
     <form data-form="request-apply"><input type="hidden" name="id" value="${el.dataset.id}" />
       <label class="field"><span>Note (optional)</span><input name="note" maxlength="280" placeholder="I've done 3 hooks this season, free after school" /></label>
@@ -1932,6 +2052,18 @@ const FORMS = {
     return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
+  challenge: async (d) => {
+    const startsAt = new Date(`${d.from}T00:00:00`).getTime();
+    const endsAt = new Date(`${d.to}T23:59:59`).getTime();
+    const body = { title: d.title, description: d.description, startsAt, endsAt, prizes: [d.p1, d.p2, d.p3].map((v) => (v === '' ? null : Number(v))) };
+    const ok = await act(() => (d.id ? api('PATCH', `/api/challenges/${d.id}`, body) : api('POST', `/api/games/${S.gameId}/challenges`, body)), d.id ? 'Challenge saved' : 'Challenge created and announced');
+    if (ok) { closeModal(); location.hash = '#/challenges'; }
+  },
+  'challenge-entry': (d) => act(() => api('PUT', `/api/challenges/${d.id}/entry`, { url: d.url, note: d.note }), 'Entry saved. Good luck!'),
+  'challenge-winners': async (d) => {
+    const places = [d.w0, d.w1, d.w2].filter((v) => v);
+    if (await act(() => api('POST', `/api/challenges/${d.id}/winners`, { places: places.map(Number) }), 'Winners announced and prizes paid!')) { closeModal(); confetti(); }
+  },
   request: async (d) => {
     const body = { jobId: d.jobId, pricing: d.pricing, quantity: d.pricing === 'project' ? null : Number(d.quantity), dueDays: d.dueDays ? Number(d.dueDays) : null, details: d.details };
     if (await act(() => api('POST', `/api/games/${S.gameId}/requests`, body), 'Request posted. Labelmates can raise a hand now.')) { closeModal(); location.hash = '#/jobs'; }

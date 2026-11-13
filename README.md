@@ -57,6 +57,17 @@ Each artist can have up to 3 open requests. Others see how many hands are up, bu
 
 A deal's "due in X days" starts when the label approves it. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).
 
+## Studio challenges
+
+**Challenges** in the menu. A Record Owner creates a challenge with:
+- a title and what to make;
+- **any date range**: *From* and *To* dates, opening at the start of the first day and closing at the end of the last day, in the owner's time zone;
+- a 1st prize, plus optional 2nd and 3rd prizes.
+
+Students can see upcoming challenges; while one is open they submit a link (SoundCloud, YouTube, Google Drive…) with a note and can update it until the end. Other students only see entries once it closes, so nobody copies; owners see everything.
+
+After the end date (or after **End now**), owners pick the winners. Prizes are paid from the label, the lobby announces the winners, and a prize can be undone like any payment. Owners can edit a challenge until winners are picked, or cancel it with no payouts. Wins show on each student's grading report. The admin bar shows challenges waiting to be judged, and students see a count of open challenges they haven't entered.
+
 ## Owner tools
 
 - **Class mode** (Admin -> Class mode): one row per student with one-tap **Tardy**, **Absent**, **Volunteer** and **Studio assistant** buttons, using the rate sheet amounts. Today's taps are listed on each row, each with **Undo**.

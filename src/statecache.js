@@ -76,6 +76,11 @@ async function refresh(game) {
     'SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY created_at DESC', gid
   );
   e.likes = await db.all('SELECT l.track_id, l.user_id FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ?', gid);
+  // Studio challenges and their entries (small tables).
+  e.challenges = await db.all('SELECT * FROM challenges WHERE game_id = ? ORDER BY starts_at DESC, id DESC LIMIT 100', gid);
+  e.entries = e.challenges.length
+    ? await db.all(`SELECT * FROM challenge_entries WHERE challenge_id IN (${e.challenges.map(() => '?').join(',')}) ORDER BY created_at`, ...e.challenges.map((c) => c.id))
+    : [];
   // Job board: open requests plus the last few filled/closed ones, and who raised a hand.
   e.requests = await db.all(
     "SELECT * FROM job_requests WHERE game_id = ? AND (status = 'open' OR updated_at > ?) ORDER BY created_at DESC LIMIT 100", gid, Date.now() - 14 * 86_400_000
