@@ -39,6 +39,7 @@ T="$REPO/tests"; OWN="BFreeds:1234:Dr. Freedman,JPolise:1234:Mr. Polise"
 HAVE_UI=0; [ -z "${SKIP_UI:-}" ] && NODE_PATH="$(npm root -g)" node -e "require('playwright')" 2>/dev/null && HAVE_UI=1
 export NODE_PATH="$(npm root -g)"
 
+node "$T/schooldays.test.js" > "$OUT/schooldays.txt" 2>&1; record "School-day due dates (weekends skipped)" "$OUT/schooldays.txt"
 fresh cr_codes; start cr_codes "tester:0000:Tester" && node "$T/signup-codes.test.js" "$OUT" > "$OUT/codes.txt" 2>&1; stop; record "Sign-up codes and season delete" "$OUT/codes.txt"
 fresh cr_lobby; start cr_lobby "tester:0000:Tester" && node "$T/lobby.test.js" "$OUT" > "$OUT/lobby.txt" 2>&1; stop; record "Lobby controls (hide, pin, delete, mute, chat modes)" "$OUT/lobby.txt"
 fresh cr_prof; start cr_prof "tester:0000:Tester" && node "$T/profiles.test.js" "$OUT" > "$OUT/profiles.txt" 2>&1; stop; record "Artist profile links" "$OUT/profiles.txt"

@@ -794,7 +794,7 @@ app.post('/api/games/:gameId/requests', auth, async (req, res) => {
   if (game.status !== 'active') fail('The job board is open while the season is live');
   const b = req.body || {};
   const price = G.priceJob(game, b); // validates the job, pricing and quantity
-  const dueDays = b.dueDays ? int(b.dueDays, 'Due in (days)', { min: 1, max: G.MAX_DAYS }) : null;
+  const dueDays = b.dueDays ? int(b.dueDays, 'Due in (school days)', { min: 1, max: G.MAX_DAYS }) : null;
   const details = str(b.details, 'Details', { max: 500 });
   const open = (await db.get("SELECT COUNT(*) AS n FROM job_requests WHERE game_id = ? AND user_id = ? AND status = 'open'", game.id, req.user.id)).n;
   if (open >= MAX_OPEN_REQUESTS) fail(`You can have up to ${MAX_OPEN_REQUESTS} open requests. Close one first.`);
