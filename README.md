@@ -53,6 +53,16 @@ The Release Guide (ten steps from a finished song to streaming services) is **hi
 
 While it's hidden, students don't see it in the menu, on their home page or in the Showcase. The guide page says it isn't open yet, and progress can't be saved. Owners can always preview it. Closing it again keeps students' progress.
 
+## Studio time
+
+**Studio** in the menu. Students request a session with a day, start time, length (30 minutes to 4 hours), what they're recording, and who's coming. Requests go to the Record Owners, and the admin bar counts **Studio requests**.
+
+Owners **approve** or **decline** each request, with an optional note the student sees. A request that overlaps an approved session is flagged. Approved sessions go on the **studio schedule** that everyone sees; other students see who and when, but not the details. Owners can cancel an approved session.
+
+After a session's start time, owners can mark a **No-show**, which charges the rate sheet's studio no-show fee and can be undone.
+
+Students can cancel their own requests before the session starts, and can have up to 5 waiting at once. Sessions appear on the grading report as booked and no-shows. Owners' data download has every request; students' has only their own. Offloading a season deletes its requests.
+
 ## Job board
 
 **Job Board** in the menu: an artist posts what they need, using the rate sheet: a job, hours/items or project rate, an optional deadline, and details. The lobby announces it. Labelmates **raise a hand**, with an optional note. The poster sees who and picks one, and it becomes a normal deal that both have agreed to, so it goes straight to the Record Owners' review queue. The money goes into escrow at that point, so the poster needs the cash then.

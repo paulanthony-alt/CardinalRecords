@@ -76,6 +76,8 @@ async function refresh(game) {
     'SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY created_at DESC', gid
   );
   e.likes = await db.all('SELECT l.track_id, l.user_id FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ?', gid);
+  // Studio time: requests and sessions from the last 30 days on.
+  e.bookings = await db.all('SELECT * FROM studio_bookings WHERE game_id = ? AND (starts_at > ? OR status = ?) ORDER BY starts_at', gid, Date.now() - 30 * 86_400_000, 'pending');
   // Studio challenges and their entries (small tables).
   e.challenges = await db.all('SELECT * FROM challenges WHERE game_id = ? ORDER BY starts_at DESC, id DESC LIMIT 100', gid);
   e.entries = e.challenges.length

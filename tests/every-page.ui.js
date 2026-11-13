@@ -2,7 +2,7 @@
 const { chromium } = require('playwright');
 const out = process.argv[2];
 const B = (process.env.BASE || 'http://localhost:3199');
-const ROUTES = ['hq', 'lobby', 'rates', 'contracts', 'jobs', 'challenges', 'contract/1', 'roster', 'artist/3', 'charts', 'showcase', 'guide', 'data', 'profile'];
+const ROUTES = ['hq', 'lobby', 'rates', 'contracts', 'jobs', 'challenges', 'studio', 'contract/1', 'roster', 'artist/3', 'charts', 'showcase', 'guide', 'data', 'profile'];
 const ADMIN = ['review', 'class', 'lobby', 'roster', 'treasury', 'rates', 'season', 'seasons', 'backups', 'new'];
 (async () => {
   const browser = await chromium.launch();
