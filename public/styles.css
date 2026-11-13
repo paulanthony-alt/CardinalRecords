@@ -731,3 +731,26 @@ table.t tr.off td { color: var(--lo); }
 .request .c-actions { margin-top: 8px; }
 .class-row .btn.pay { background: var(--ok); color: #fff; }
 .class-row .btn.pay:hover { background: #245832; }
+
+/* ---------- studio challenges ---------- */
+input[type=date] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; background: var(--paper); box-shadow: var(--sunk); font: inherit; font-size: 13px; }
+.challenges { display: grid; gap: 10px; }
+.challenge { padding: 12px 14px; background: var(--paper); box-shadow: var(--raised-soft); border-left: 4px solid var(--lo); }
+.challenge.ph-open { border-left-color: var(--ok); }
+.challenge.ph-judging { border-left-color: var(--brass); }
+.challenge.ph-judged { border-left-color: var(--red); }
+.challenge .ch-head { display: flex; gap: 10px; align-items: flex-start; }
+.challenge h3 { margin: 0; font-size: 16px; }
+.challenge .ch-dates { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 12.5px; color: var(--dk); }
+.challenge .ch-dates svg { width: 12px; height: 12px; }
+.challenge .ch-desc { margin: 8px 0 0; white-space: pre-line; font-size: 13.5px; }
+.challenge .prizes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.challenge .prize { padding: 2px 8px; font-size: 12.5px; background: var(--note); border: 1px solid var(--brass); }
+.challenge .entry-form { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.challenge .entries { display: grid; gap: 2px; margin-top: 10px; }
+.challenge .entry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 5px 0; border-top: 1px solid var(--rule); }
+.challenge .entry.won { background: #fffbe8; }
+.challenge .entry .medal { font-size: 18px; }
+.challenge .entry .entry-note { font-size: 12.5px; }
+.challenge .entry .btn { margin-left: auto; }
+.challenge .c-actions { margin-top: 10px; }

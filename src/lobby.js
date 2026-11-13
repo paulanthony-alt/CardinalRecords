@@ -20,6 +20,7 @@ const CATEGORIES = [
   ['track', 'Music shared to the Showcase', ['track']],
   ['profile', 'Artist profiles shared', ['profile']],
   ['request', 'Job board requests', ['request']],
+  ['challenge', 'Studio challenges and winners', ['challenge']],
   ['release', 'Release Guide finished', ['release']],
   ['phase', 'Season updates (start, end, music sharing)', ['phase']],
 ];

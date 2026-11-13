@@ -43,6 +43,7 @@ fresh cr_codes; start cr_codes "tester:0000:Tester" && node "$T/signup-codes.tes
 fresh cr_lobby; start cr_lobby "tester:0000:Tester" && node "$T/lobby.test.js" "$OUT" > "$OUT/lobby.txt" 2>&1; stop; record "Lobby controls (hide, pin, delete, mute, chat modes)" "$OUT/lobby.txt"
 fresh cr_prof; start cr_prof "tester:0000:Tester" && node "$T/profiles.test.js" "$OUT" > "$OUT/profiles.txt" 2>&1; stop; record "Artist profile links" "$OUT/profiles.txt"
 fresh cr_tools; start cr_tools "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_tools" node "$T/class-tools.test.js" "$OUT" > "$OUT/tools.txt" 2>&1; stop; record "Job board, deadlines, class mode, undo, paste roster, reports" "$OUT/tools.txt"
+fresh cr_chal; start cr_chal "tester:0000:Tester" && node "$T/challenges.test.js" "$OUT" > "$OUT/challenges.txt" 2>&1; stop; record "Studio challenges (date ranges, entries, winners)" "$OUT/challenges.txt"
 fresh cr_class; start cr_class "$OWN" && node "$T/classroom.test.js" "$OUT" > "$OUT/class.txt" 2>&1; record "Classroom flows (30 students)" "$OUT/class.txt"
 if [ $HAVE_UI = 1 ]; then node "$T/every-page.ui.js" "$OUT" 2>&1 | grep -v "401 (Unauthorized)" > "$OUT/pages.txt"; [ -s "$OUT/pages.txt" ] || echo "no problems" > "$OUT/pages.txt"; record "Every page, student + owner, phone + laptop" "$OUT/pages.txt" "no problems"; fi
 node "$T/drift.js" save "$OUT" >/dev/null 2>&1; stop; start cr_class "$OWN"; node "$T/drift.js" compare "$OUT" > "$OUT/drift.txt" 2>&1; record "Shared cache matches the database" "$OUT/drift.txt" "PASS cached"
@@ -57,6 +58,7 @@ if [ $HAVE_UI = 1 ]; then
   fresh cr_lobbyui; start cr_lobbyui "tester:0000:Tester" && node "$T/lobby.ui.js" "$OUT" > "$OUT/lobbyui.txt" 2>&1; stop; record "Admin bar and lobby tools in the browser" "$OUT/lobbyui.txt"
   fresh cr_profui; start cr_profui "tester:0000:Tester" && node "$T/profiles.ui.js" "$OUT" > "$OUT/profui.txt" 2>&1; stop; record "Artist profiles in the browser" "$OUT/profui.txt"
   fresh cr_toolsui; start cr_toolsui "tester:0000:Tester" && node "$T/class-tools.ui.js" "$OUT" > "$OUT/toolsui.txt" 2>&1; stop; record "Job board, class mode, undo, paste roster, reports in the browser" "$OUT/toolsui.txt"
+  fresh cr_chalui; start cr_chalui "tester:0000:Tester" && node "$T/challenges.ui.js" "$OUT" > "$OUT/chalui.txt" 2>&1; stop; record "Studio challenges in the browser" "$OUT/chalui.txt"
   fresh cr_sync; start cr_sync "$OWN" && node "$T/sync-owners.ui.js" "$OUT" > "$OUT/sync.txt" 2>&1; stop; record "Change check and two-owner sync" "$OUT/sync.txt"
 else echo "SKIP  Browser suites (Playwright not available)" >> "$SUMMARY"; fi
 n=$(grep -ciE "error|unhandled" "$OUT/server.log" 2>/dev/null); echo "INFO  Server log errors: ${n:-0}" >> "$SUMMARY"

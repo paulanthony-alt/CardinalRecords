@@ -159,6 +159,33 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 ALTER TABLE ledger ADD COLUMN IF NOT EXISTS reverses INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_reverses ON ledger(reverses) WHERE reverses IS NOT NULL;
 
+-- Studio challenges: owners set a challenge for any date range (from / to) with prizes;
+-- artists submit a link while it's open; owners pick 1st-3rd and prizes pay out.
+CREATE TABLE IF NOT EXISTS challenges (
+  id          SERIAL  PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  title       TEXT    NOT NULL,
+  description TEXT    NOT NULL DEFAULT '',
+  starts_at   BIGINT  NOT NULL,
+  ends_at     BIGINT  NOT NULL,
+  prizes      TEXT    NOT NULL DEFAULT '[]',     -- JSON [1st, 2nd, 3rd]
+  status      TEXT    NOT NULL DEFAULT 'active', -- active | judged | cancelled
+  created_by  INTEGER,
+  created_at  BIGINT  NOT NULL,
+  updated_at  BIGINT  NOT NULL
+);
+CREATE TABLE IF NOT EXISTS challenge_entries (
+  challenge_id INTEGER NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL,
+  url          TEXT    NOT NULL,
+  note         TEXT    NOT NULL DEFAULT '',
+  place        INTEGER,                         -- 1, 2, 3 once judged
+  created_at   BIGINT  NOT NULL,
+  updated_at   BIGINT  NOT NULL,
+  PRIMARY KEY (challenge_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_challenges_game ON challenges(game_id);
+
 -- Job board: an artist posts what they need; labelmates raise a hand; the poster picks one
 -- and it becomes a normal rate-sheet deal. user ids aren't foreign keys so offloading a
 -- season can delete its artists; rows go when their season or request does.

@@ -555,6 +555,17 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
       id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at,
       reverses: l.reverses || null, undone: reversed.has(l.id), by: isOwner ? l.created_by : undefined,
     })),
+    challenges: (e.challenges || []).map((c) => {
+      const all = (e.entries || []).filter((x) => x.challenge_id === c.id);
+      const closed = c.status !== 'active' || Date.now() >= c.ends_at;
+      // Students see other entries only once it's closed, so nobody copies.
+      const visible = isOwner || closed ? all : all.filter((x) => x.user_id === me.id);
+      return {
+        id: c.id, title: c.title, description: c.description, startsAt: c.starts_at, endsAt: c.ends_at, prizes: parsePrizes(c.prizes),
+        status: c.status, createdAt: c.created_at, entryCount: all.length,
+        entries: visible.map((x) => ({ userId: x.user_id, url: x.url, note: x.note, place: x.place, at: x.updated_at })),
+      };
+    }),
     requests: (e.requests || []).map((q) => {
       const apps = (e.applicants || []).filter((a) => a.request_id === q.id);
       const mine = isOwner || q.user_id === me.id;
@@ -649,6 +660,123 @@ app.post('/api/games/:gameId/players/bulk', auth, ownerOnly, async (req, res) =>
 app.post('/api/ledger/:entryId/reverse', auth, ownerOnly, async (req, res) => {
   const r = await G.reverseEntry(int(req.params.entryId, 'Transaction'), req.user);
   res.json({ ok: true, id: r.id });
+});
+
+// ---------- studio challenges ----------
+const CH_MAX_SPAN = 366 * G.DAY;
+const parsePrizes = (raw) => { try { const p = JSON.parse(raw || '[]'); return Array.isArray(p) ? p : []; } catch { return []; } };
+/** Is a challenge taking entries right now? */
+const challengeOpen = (c, now = Date.now()) => c.status === 'active' && now >= c.starts_at && now < c.ends_at;
+
+/** Validate an owner's challenge form (create or edit). Dates are timestamps chosen in the owner's browser. */
+function challengeInput(b, cur = null) {
+  const title = str(b.title ?? cur?.title, 'Title', { min: 3, max: 80 });
+  const description = str(b.description ?? cur?.description, 'Description', { max: 1000 });
+  const startsAt = int(b.startsAt ?? cur?.starts_at, 'Start date', { min: 0 });
+  const endsAt = int(b.endsAt ?? cur?.ends_at, 'End date', { min: 0 });
+  if (endsAt <= startsAt) fail('The end date has to be after the start date');
+  if (endsAt - startsAt > CH_MAX_SPAN) fail('A challenge can run for up to a year');
+  const raw = Array.isArray(b.prizes) ? b.prizes : cur ? parsePrizes(cur.prizes) : [];
+  const prizes = raw.slice(0, 3).map((v, i) => (v === '' || v == null ? null : int(v, `${['1st', '2nd', '3rd'][i]} prize`, { min: 0, max: 100_000 })));
+  while (prizes.length && prizes[prizes.length - 1] == null) prizes.pop();
+  if (prizes[0] == null) fail('Set a 1st place prize (it can be $0)');
+  if (prizes.includes(null)) fail('Fill in the prizes in order: 1st, then 2nd, then 3rd');
+  return { title, description, startsAt, endsAt, prizes };
+}
+async function challengeFor(req) {
+  const c = await db.get('SELECT * FROM challenges WHERE id = ?', int(req.params.challengeId, 'Challenge'));
+  if (!c) fail('That challenge is gone', 404);
+  if (req.user.role !== 'owner' && req.user.game_id !== c.game_id) fail('Not your label', 403);
+  return { c, game: await G.getGame(c.game_id) };
+}
+const prizeText = (prizes) => prizes.map((p, i) => `${['1st', '2nd', '3rd'][i]} ${G.fmt$(p)}`).join(', ');
+
+app.post('/api/games/:gameId/challenges', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const v = challengeInput(req.body || {});
+  if (v.endsAt <= Date.now()) fail('The end date has already passed');
+  const now = Date.now();
+  const { id } = await db.run(
+    'INSERT INTO challenges (game_id, title, description, starts_at, ends_at, prizes, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    game.id, v.title, v.description, v.startsAt, v.endsAt, JSON.stringify(v.prizes), req.user.id, now, now
+  );
+  await G.post(game.id, 'challenge', req.user.id, v.startsAt <= now
+    ? `New studio challenge: "${v.title}". Prizes: ${prizeText(v.prizes)}. Open Challenges to enter.`
+    : `Coming up: the "${v.title}" studio challenge. Prizes: ${prizeText(v.prizes)}. See Challenges for the dates.`);
+  res.json({ id });
+});
+
+app.patch('/api/challenges/:challengeId', auth, ownerOnly, async (req, res) => {
+  const { c } = await challengeFor(req);
+  if (c.status !== 'active') fail('Winners have been picked or it was cancelled, so it can\'t be changed');
+  const v = challengeInput(req.body || {}, c);
+  await db.run('UPDATE challenges SET title = ?, description = ?, starts_at = ?, ends_at = ?, prizes = ?, updated_at = ? WHERE id = ?',
+    v.title, v.description, v.startsAt, v.endsAt, JSON.stringify(v.prizes), Date.now(), c.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/challenges/:challengeId/end', auth, ownerOnly, async (req, res) => {
+  const { c } = await challengeFor(req);
+  if (!challengeOpen(c)) fail("It isn't open right now");
+  await db.run('UPDATE challenges SET ends_at = ?, updated_at = ? WHERE id = ?', Date.now(), Date.now(), c.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/challenges/:challengeId/cancel', auth, ownerOnly, async (req, res) => {
+  const { c } = await challengeFor(req);
+  if (c.status !== 'active') fail('Already finished');
+  await db.run("UPDATE challenges SET status = 'cancelled', updated_at = ? WHERE id = ?", Date.now(), c.id);
+  res.json({ ok: true });
+});
+
+// An artist's entry: a link plus a note; they can change it until the end date.
+app.put('/api/challenges/:challengeId/entry', auth, async (req, res) => {
+  const { c, game } = await challengeFor(req);
+  if (req.user.role !== 'player') fail('Only artists enter challenges', 403);
+  if (game.status === 'archived') fail('This season is archived');
+  if (!challengeOpen(c)) fail(Date.now() < c.starts_at ? "This challenge hasn't started yet" : 'This challenge is closed');
+  const url = G.httpUrl(req.body?.url, 'Link');
+  const note = str(req.body?.note, 'Note', { max: 500 });
+  const now = Date.now();
+  await db.run(`INSERT INTO challenge_entries (challenge_id, user_id, url, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (challenge_id, user_id) DO UPDATE SET url = EXCLUDED.url, note = EXCLUDED.note, updated_at = EXCLUDED.updated_at`, c.id, req.user.id, url, note, now, now);
+  await db.run('UPDATE challenges SET updated_at = ? WHERE id = ?', now, c.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/challenges/:challengeId/entry', auth, async (req, res) => {
+  const { c } = await challengeFor(req);
+  if (!challengeOpen(c)) fail('This challenge is closed');
+  await db.run('DELETE FROM challenge_entries WHERE challenge_id = ? AND user_id = ?', c.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// Owners pick 1st (and 2nd, 3rd if there are prizes for them) after the end date; prizes pay out.
+app.post('/api/challenges/:challengeId/winners', auth, ownerOnly, async (req, res) => {
+  const { c, game } = await challengeFor(req);
+  if (c.status !== 'active') fail('Winners were already picked, or it was cancelled');
+  if (Date.now() < c.ends_at) fail('Pick winners after the end date (or end it now first)');
+  if (game.status === 'archived') fail('This season is archived');
+  const prizes = parsePrizes(c.prizes);
+  const places = (Array.isArray(req.body?.places) ? req.body.places : []).filter((v) => v != null && v !== '').map((v) => int(v, 'Winner'));
+  if (!places.length) fail('Pick at least a 1st place');
+  if (places.length > Math.max(1, prizes.length)) fail(`This challenge has prizes for ${prizes.length} ${prizes.length === 1 ? 'place' : 'places'}`);
+  if (new Set(places).size !== places.length) fail('Each artist can only win one place');
+  const names = [];
+  await tx(async () => {
+    for (const [i, uid] of places.entries()) {
+      const e = await db.get('SELECT 1 FROM challenge_entries WHERE challenge_id = ? AND user_id = ?', c.id, uid);
+      if (!e) fail("Winners have to be artists who entered");
+      await db.run('UPDATE challenge_entries SET place = ? WHERE challenge_id = ? AND user_id = ?', i + 1, c.id, uid);
+      const place = ['1st', '2nd', '3rd'][i];
+      if (prizes[i] > 0) await G.ledgerEntry(game.id, uid, prizes[i], 'grant', { memo: `Challenge prize: ${c.title} (${place} place)`.slice(0, 140), by: req.user.id });
+      names.push(`${place}: ${await G.nameOf(uid)}${prizes[i] > 0 ? ` (${G.fmt$(prizes[i])})` : ''}`);
+    }
+    await db.run("UPDATE challenges SET status = 'judged', updated_at = ? WHERE id = ?", Date.now(), c.id);
+    await G.post(game.id, 'challenge', req.user.id, `"${c.title}" winners! ${names.join(', ')}. Congratulations!`);
+  });
+  res.json({ ok: true });
 });
 
 // ---------- job board ----------
@@ -883,6 +1011,10 @@ async function exportData(game, viewer) {
       ? await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)
       : (await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)).filter((f) => LB.studentCanSee(f, LB.lobbyOf(game))).map(({ hidden, ...f }) => f),
     tracks: await db.all('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id', game.id),
+    challenges: (await db.all('SELECT id, title, description, starts_at, ends_at, prizes, status, created_at FROM challenges WHERE game_id = ? ORDER BY id', game.id)),
+    challenge_entries: (await db.all('SELECT e.*, c.status AS c_status, c.ends_at AS c_ends FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? ORDER BY e.challenge_id, e.created_at', game.id))
+      .filter((x) => isOwner || x.user_id === viewer.id || x.c_status !== 'active' || Date.now() >= x.c_ends)
+      .map(({ c_status, c_ends, ...x }) => x),
     job_requests: await db.all('SELECT id, user_id, job_id, pricing, quantity, due_days, details, status, contract_id, created_at FROM job_requests WHERE game_id = ? ORDER BY id', game.id),
   };
 }
@@ -967,6 +1099,7 @@ async function purgeSeason(gameId) {
   await db.run('DELETE FROM tracks WHERE game_id = ?', gameId);
   await db.run('DELETE FROM services WHERE game_id = ?', gameId);
   await db.run('DELETE FROM job_requests WHERE game_id = ?', gameId); // applicants go with them
+  await db.run('DELETE FROM challenges WHERE game_id = ?', gameId); // entries go with them
   const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
     AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
     AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)
