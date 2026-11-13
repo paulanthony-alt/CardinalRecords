@@ -18,6 +18,7 @@ const CATEGORIES = [
   ['grant', 'Label payments and Game Bonuses', ['grant']],
   ['join', 'New artists joining', ['join']],
   ['track', 'Music shared to the Showcase', ['track']],
+  ['profile', 'Artist profiles shared', ['profile']],
   ['release', 'Release Guide finished', ['release']],
   ['phase', 'Season updates (start, end, music sharing)', ['phase']],
 ];

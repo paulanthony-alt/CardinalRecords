@@ -104,7 +104,7 @@ function publicUser(u, { withPin = false } = {}) {
   const out = {
     id: u.id, username: u.username, role: u.role, gameId: u.game_id, displayName: u.display_name,
     roleTitle: u.role_title, bio: u.bio, color: u.color, active: !!u.active, lastSeen: u.last_seen,
-    claimed: u.pin != null, createdAt: u.created_at,
+    claimed: u.pin != null, createdAt: u.created_at, profileUrl: u.profile_url || null,
   };
   if (withPin) { out.pin = u.pin; out.claimCode = u.pin == null ? u.claim_code : null; out.muted = !!u.muted; }
   return out;
@@ -220,7 +220,12 @@ app.put('/api/me', auth, async (req, res) => {
   const roleTitle = str(b.roleTitle, 'Role', { max: 40 });
   const bio = str(b.bio, 'Bio', { max: 500 });
   const color = /^#[0-9a-fA-F]{6}$/.test(b.color || '') ? b.color : req.user.color;
-  await db.run('UPDATE users SET display_name = ?, role_title = ?, bio = ?, color = ? WHERE id = ?', displayName, roleTitle, bio, color, req.user.id);
+  // Artist profile link: only players have one; leaving the field out keeps the current link.
+  const profile = req.user.role === 'player' && b.profileUrl !== undefined ? G.profileUrl(b.profileUrl) : req.user.profile_url;
+  await db.run('UPDATE users SET display_name = ?, role_title = ?, bio = ?, color = ?, profile_url = ? WHERE id = ?', displayName, roleTitle, bio, color, profile || null, req.user.id);
+  if (profile && profile !== req.user.profile_url && req.user.game_id) {
+    await G.post(req.user.game_id, 'profile', req.user.id, `${displayName} ${req.user.profile_url ? 'updated' : 'shared'} their artist profile. Check out what they're great at.`);
+  }
   res.json({ ok: true });
 });
 
@@ -360,6 +365,7 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
   let active = p.active;
   if (req.body.active != null) active = req.body.active ? 1 : 0;
   const muted = req.body.muted != null ? (req.body.muted ? 1 : 0) : p.muted;
+  const profile = req.body.profileUrl !== undefined ? G.profileUrl(req.body.profileUrl) : p.profile_url;
   // Moving an artist to another season: their money and deals stay in the old season's
   // records; in the new one they start fresh (with its advance if it's already live).
   const gameId = req.body.gameId != null ? int(req.body.gameId, 'Season') : p.game_id;
@@ -379,7 +385,7 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
       const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1 AND id != ?", gameId, p.id)).n;
       if (count >= target.max_players) fail(`${target.name} is full (${target.max_players} artists max)`);
     }
-    await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ?, muted = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, muted, p.id);
+    await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ?, muted = ?, profile_url = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, muted, profile || null, p.id);
     if (moving) {
       if (target.status === 'active') await G.payAdvance(target, p.id);
       await G.post(gameId, 'join', p.id, `${displayName} joined ${target.name}${roleTitle ? ` as ${roleTitle}` : ''}.`);
@@ -707,7 +713,7 @@ async function exportData(game, viewer) {
         balance: s.stats.balance, escrow: s.stats.escrow, net_worth: s.stats.netWorth, earned: s.stats.earned, spent: s.stats.spent,
         deals_sold: s.stats.dealsSold, deals_bought: s.stats.dealsBought, rating: s.stats.rating, level: s.progress.level,
         xp: s.progress.xp, title: s.progress.title, tracks: s.stats.tracks, likes: s.stats.likes,
-        badges: s.badges.map((b) => b.name).join('; '), joined_at: new Date(u.created_at).toISOString(),
+        badges: s.badges.map((b) => b.name).join('; '), profile_url: u.profile_url || '', joined_at: new Date(u.created_at).toISOString(),
       };
       if (isOwner) { row.pin = u.pin; row.claim_code = u.pin == null ? u.claim_code : null; }
       return row;

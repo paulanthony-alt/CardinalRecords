@@ -226,6 +226,16 @@ async function writeBackupPdf(out, games, opts = {}) {
       g.name
     );
 
+    // ---------- artist profiles ----------
+    const withProfile = s.stats.filter((r) => r.player.profile_url);
+    if (withProfile.length) {
+      ensure(60, g.name);
+      doc.font('Helvetica-Bold').fontSize(10.5).fillColor(INK).text('Artist profiles');
+      doc.moveDown(0.3);
+      table([{ h: 'Artist', w: 25, bold: true }, { h: 'Role', w: 20 }, { h: 'Profile link', w: 55 }],
+        withProfile.map((r) => [r.player.display_name, r.player.role_title, r.player.profile_url]), g.name);
+    }
+
     // ---------- rate sheet ----------
     ensure(60, g.name);
     doc.font('Helvetica-Bold').fontSize(10.5).fillColor(INK).text('Rate sheet in effect');

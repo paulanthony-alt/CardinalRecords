@@ -47,6 +47,14 @@ Owners see a **Sign-up day steps** checklist at the top of Roster & PINs. It sho
 
 A season that was **never started** (a test, or a mistake) can be deleted from All seasons or Season settings by typing its name. This removes its signed artists and frees their usernames. Seasons that have been played go through archive, backup and offload instead.
 
+## Artist profiles
+
+Each artist can add an **artist profile link** in their Profile: a Google Slides, Google Doc, Google Drive file or Google Site showing what they're great at. Only Google links are accepted (`docs.google.com`, `drive.google.com`, `sites.google.com`); `http://` becomes `https://`, and look-alike addresses are refused.
+
+Profiles show in an **Artist profiles** section of the Showcase. It's open all season, not just at the end, so labelmates can see who to hire. They also appear as a button on the artist's page, in the data download and in the PDF backup.
+
+Sharing or updating a link posts in the lobby. Owners can hide those posts in Lobby controls, or remove any artist's link from the Showcase. Links open on Google in a new tab; the site never loads Google content itself. Students must share their file so others can view it, either with "anyone with the link" or with their school.
+
 ## Admin bar and lobby controls (owners)
 
 Record Owners get an **admin bar** under the menu on every page. It shows:
