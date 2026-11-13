@@ -278,18 +278,15 @@ function stepper(c, mini = false) {
     `<div class="st ${i < idx ? 'done' : ''} ${i === idx ? 'cur' : ''}"><span class="dot"></span>${s}</div>`).join('')}</div>`;
 }
 
-/** Deadline badge for a deal: due soon, overdue, or delivered on time / late. */
+/** Deadline badge for a deal: due soon, overdue, or delivered on time / late. Due dates count school days (no weekends). */
 function dueBadge(c, { long = false } = {}) {
   if (!c.dueAt) return '';
-  const day = 86_400_000;
-  const when = new Date(c.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  if (c.overdue) {
-    const d = Math.max(1, Math.floor((Date.now() - c.dueAt) / day));
-    return `<span class="due due-over" title="Was due ${when}">Overdue ${plural(d, 'day')}</span>`;
-  }
+  const when = new Date(c.dueAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  if (c.overdue) return `<span class="due due-over" title="Was due by the end of ${when}">Overdue (was due ${when})</span>`;
   if (c.status === 'active') {
-    const left = Math.ceil((c.dueAt - Date.now()) / day);
-    return `<span class="due ${left <= 1 ? 'due-soon' : ''}" title="Due ${when}">${left <= 0 ? 'Due today' : left === 1 ? 'Due tomorrow' : `Due in ${left} days`}${long ? ` (${when})` : ''}</span>`;
+    const today = new Date(); const tomorrow = new Date(Date.now() + 86_400_000); const due = new Date(c.dueAt);
+    const label = due.toDateString() === today.toDateString() ? 'Due today' : due.toDateString() === tomorrow.toDateString() ? 'Due tomorrow' : `Due ${when}`;
+    return `<span class="due ${label !== `Due ${when}` ? 'due-soon' : ''}" title="Due by the end of ${when}. Weekends don't count.">${label}</span>`;
   }
   if (c.deliveredAt && ['delivered', 'completed'].includes(c.status)) return c.late ? `<span class="due due-over" title="Was due ${when}">Delivered late</span>` : `<span class="due due-ok">On time</span>`;
   return long ? `<span class="due" title="Due ${when}">Due ${when}</span>` : '';
@@ -302,7 +299,7 @@ function contractCard(c) {
   return `<div class="it contract st-${c.status} ${needs ? 'sel' : ''}" data-act="nav" data-to="#/contract/${c.id}">
     <span class="chip s-${c.status}">${STATUS[c.status]}</span>
     <div class="it-main"><div><b>${esc(c.title)}</b> <span class="c-no mono">${cno(c.id)}</span>${needs ? ' <span class="needs-tag">Your move</span>' : ''}</div>
-      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.jobId ? ` · ${esc(pricingText(c))}` : ''}${!c.dueAt && c.dueDays ? ` · due ${plural(c.dueDays, 'day')} after approval` : ''} ${dueBadge(c)}</div></div>
+      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.jobId ? ` · ${esc(pricingText(c))}` : ''}${!c.dueAt && c.dueDays ? ` · due ${plural(c.dueDays, 'school day')} after approval` : ''} ${dueBadge(c)}</div></div>
     <div class="it-amt mono">${money(c.amount)}</div>
     ${acts.length ? `<div class="c-actions">${acts.slice(0, 3).map(([a, l, k]) => `<button class="btn sm ${k}" data-act="contract" data-id="${c.id}" data-a="${a}">${l}</button>`).join('')}</div>` : ''}
   </div>`;
@@ -843,7 +840,7 @@ function contractDetailView(id) {
         <div class="clause"><b>Compensation</b>
           <table class="money-table">${c.jobId ? `<tr><td>Rate sheet: ${esc(S.state.rates.jobs.find((j) => j.id === c.jobId)?.name || c.jobId)}</td><td>${esc(pricingText(c))}</td></tr>` : ''}<tr><td>Deal value</td><td>${money(c.amount)}</td></tr>${g.label_cut_pct ? `<tr><td>Label cut (${g.label_cut_pct}%)</td><td>-${money(fee)}</td></tr>` : ''}<tr><td>Paid to the Artist on completion</td><td>${money(c.amount - fee)}</td></tr></table>
           <small class="mono muted">Currently held in escrow: ${money(c.escrow)}</small></div>
-        ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'day')} of label approval${c.dueAt ? `: due ${new Date(c.dueAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}. ${dueBadge(c, { long: true })}${isOwner() && (c.overdue || c.late) && !c.events.some((e) => e.action === 'late_fee') ? ` <button class="btn sm danger" data-act="contract" data-id="${c.id}" data-a="late_fee">Charge the late fee</button>` : ''}</p>` : ''}
+        ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'school day')} of label approval (weekends don't count)${c.dueAt ? `: due ${new Date(c.dueAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}. ${dueBadge(c, { long: true })}${isOwner() && (c.overdue || c.late) && !c.events.some((e) => e.action === 'late_fee') ? ` <button class="btn sm danger" data-act="contract" data-id="${c.id}" data-a="late_fee">Charge the late fee</button>` : ''}</p>` : ''}
         ${c.rating ? `<p class="clause"><b>Client rating</b>${'★'.repeat(c.rating)}${'☆'.repeat(5 - c.rating)}</p>` : ''}
         <div class="sigs"><div class="sig">${signed.buyer}Client</div><div class="sig">${signed.seller}Artist</div><div class="sig">${signed.owner}Record Owner</div></div>
       </div>
@@ -1420,7 +1417,7 @@ function jobsView() {
     const hands = q.applicants ? (q.applicants.length ? `<div class="hands"><b>${plural(q.applicants.length, 'hand')} raised</b>${q.applicants.map((a) => `<div class="hand">${nameLine(a.userId)}${a.note ? `<span class="dim">“${esc(a.note)}”</span>` : ''}${mine && q.status === 'open' ? `<button class="btn sm primary" data-act="request-hire" data-id="${q.id}" data-user="${a.userId}">Pick ${esc(nameOf(a.userId).split(' ')[0])}</button>` : ''}</div>`).join('')}</div>` : '<p class="dim" style="margin:6px 0 0">No hands raised yet.</p>')
       : `<p class="dim" style="margin:6px 0 0">${plural(q.applicantCount, 'hand')} raised${q.applied ? ' (including yours)' : ''}</p>`;
     const status = q.status === 'filled' ? `<span class="chip s-completed">Filled</span>${q.contractId ? ` <a href="#/contract/${q.contractId}">${cno(q.contractId)}</a>` : ''}` : q.status === 'closed' ? '<span class="chip s-cancelled">Closed</span>' : '<span class="chip s-active">Open</span>';
-    return `<div class="request ${mine ? 'mine' : ''}"><div class="rq-head">${avatar(poster)}<div><b>${esc(poster?.displayName || 'Artist')}</b> is looking for a <b>${requestWhat(q)}</b><div class="dim" style="font-size:12.5px">${ago(q.createdAt)}${q.dueDays ? ` · due ${plural(q.dueDays, 'day')} after approval` : ''} · ${status}</div></div>
+    return `<div class="request ${mine ? 'mine' : ''}"><div class="rq-head">${avatar(poster)}<div><b>${esc(poster?.displayName || 'Artist')}</b> is looking for a <b>${requestWhat(q)}</b><div class="dim" style="font-size:12.5px">${ago(q.createdAt)}${q.dueDays ? ` · due ${plural(q.dueDays, 'school day')} after approval` : ''} · ${status}</div></div>
       <div class="rq-amt mono">${q.amount != null ? money(q.amount) : ''}</div></div>
       ${q.details ? `<div class="terms">${esc(q.details)}</div>` : ''}${hands}${actions ? `<div class="c-actions">${actions}</div>` : ''}</div>`;
   };
@@ -1566,7 +1563,7 @@ function hireModal({ jobId, sellerId, request = false }) {
         <label class="check"><input type="radio" name="pricing" value="project" data-change="hire-calc" /> The project rate</label></div></div>
       <div class="row">
         <label class="field" id="hire-qty"><span id="hire-qty-label">${job.unit === 'item' ? 'Items' : 'Hours / class blocks'}</span><input name="quantity" type="number" min="1" max="100" step="1" value="1" required data-input-calc="1" /></label>
-        <label class="field"><span>Due in (days)</span><input name="dueDays" type="number" min="1" max="365" value="7" /></label>
+        <label class="field"><span>Due in (school days)</span><input name="dueDays" type="number" min="1" max="100" value="5" /><small>Counted from approval. Weekends don't count.</small></label>
       </div>
       ${request ? '' : `<label class="field"><span>What it's for (optional)</span><input name="title" maxlength="100" placeholder="${esc(job.name)} for my single" /></label>`}
       <label class="field"><span>Details</span><textarea name="${request ? 'details' : 'terms'}" maxlength="${request ? 500 : 2000}" placeholder="What exactly needs doing? Files to deliver, credit you'll give…"></textarea></label>

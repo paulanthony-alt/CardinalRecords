@@ -1,6 +1,7 @@
 'use strict';
 const { db, tx } = require('./db');
 const { sheetFor, findItem } = require('./rates');
+const { schoolDueAt } = require('./schooldays');
 
 const DAY = 86_400_000;
 const MAX_DAYS = 365;
@@ -246,7 +247,7 @@ async function createContract(game, buyer, body, { acceptedBy = null } = {}) {
   const price = priceJob(game, body);
   const title = str(body.title || price.job.name, 'Title', { min: 1, max: 100 });
   const terms = str(body.terms, 'Terms', { max: 2000 });
-  const dueDays = body.dueDays ? int(body.dueDays, 'Due in (days)', { min: 1, max: MAX_DAYS }) : null;
+  const dueDays = body.dueDays ? int(body.dueDays, 'Due in (school days)', { min: 1, max: MAX_DAYS }) : null;
 
   return tx(async () => {
     const now = Date.now();
@@ -268,12 +269,13 @@ async function createContract(game, buyer, body, { acceptedBy = null } = {}) {
 
 // ---------- deadlines ----------
 /**
- * When a deal is due: `due_days` after the label approved it (work starts at approval).
+ * When a deal is due: `due_days` school days after the label approved it (weekends don't
+ * count; due by the end of that day, school time). Work starts at approval.
  * Returns { dueAt, deliveredAt, overdue, late } (times in ms, or null).
  */
 function deadline(c, events = []) {
   if (!c.due_days || !c.approved_at) return { dueAt: null, deliveredAt: null, overdue: false, late: false };
-  const dueAt = Number(c.approved_at) + c.due_days * DAY;
+  const dueAt = schoolDueAt(c.approved_at, c.due_days); // school days: weekends don't count
   const delivered = events.filter((e) => e.action === 'deliver' || e.action === 'complete').map((e) => Number(e.created_at)).sort((a, b) => a - b)[0] || null;
   const overdue = c.status === 'active' && Date.now() > dueAt;
   const late = delivered ? delivered > dueAt : overdue;

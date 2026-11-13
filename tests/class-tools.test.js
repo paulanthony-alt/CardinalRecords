@@ -95,8 +95,11 @@ const DAY = 86_400_000;
   // ================= 6. deadlines =================
   await call('o', 'POST', `/api/contracts/${deal.id}/action`, { action: 'approve' });
   let c = (await S('devon')).contracts.find((x) => x.id === deal.id);
-  check('deadline: due date set at approval', c.dueAt && Math.abs(c.dueAt - (Date.now() + 3 * DAY)) < 60_000 && c.overdue === false);
-  await db.query('UPDATE contracts SET approved_at = $1, updated_at = $2 WHERE id = $3', [Date.now() - 5 * DAY, Date.now(), deal.id]);
+  const { schoolDueAt } = require(path.join(__dirname, '..', 'src', 'schooldays'));
+  const approvedAt = (await db.query('SELECT approved_at FROM contracts WHERE id = $1', [deal.id])).rows[0].approved_at;
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date(c.dueAt));
+  check('deadline: 3 school days after approval, weekends skipped', c.dueAt === schoolDueAt(Number(approvedAt), 3) && !['Sat', 'Sun'].includes(wd) && c.overdue === false, wd);
+  await db.query('UPDATE contracts SET approved_at = $1, updated_at = $2 WHERE id = $3', [Date.now() - 10 * DAY, Date.now(), deal.id]);
   await call('maria', 'POST', `/api/games/${g}/feed`, { message: 'nudge' }); // any change reloads the shared copy
   c = (await S('maria')).contracts.find((x) => x.id === deal.id);
   check('deadline: overdue once the date passes', c.overdue === true && c.late === true);

@@ -71,7 +71,7 @@ const signIn = async (page, u, pin) => {
   const deal = (await (await r.get(`${B}/api/games/${g}/state`)).json()).contracts[0];
   await r.post(`${B}/api/contracts/${deal.id}/action`, { data: { action: 'approve' } });
   await o.goto(`${B}/#/contract/${deal.id}`); await o.reload(); await o.waitForSelector('.due');
-  check('deadline: badge on the deal', /Due in 7 days/.test(await o.locator('.due').first().innerText()));
+  check('deadline: badge on the deal (school days)', /^Due (today|tomorrow|\w{3}, \w{3} \d+)$/.test(await o.locator('.due').first().innerText()), await o.locator('.due').first().innerText());
 
   // ---- class mode + undo
   await o.goto(`${B}/#/admin/class`); await o.waitForSelector('.class-row');
