@@ -69,6 +69,12 @@ Students can cancel their own requests before the session starts, and can have u
 
 Each artist can have up to 3 open requests. Others see how many hands are up, but not who. Owners see everything and can close any request. Moving an artist to another season closes their open requests.
 
+### Label jobs (Record Owners post paid work)
+
+Owners can post **label jobs** on the Job Board with **Post a label job**, using any paid item from the rate sheet: **Volunteer in other GHS EMusic classes** (rate x class blocks) or **Studio Assistant** (an amount, at least the $15 minimum). Each job has how many artists are needed, when (free text, like "Tuesday, 3rd period") and details, and the lobby announces it. Label jobs are open while the season is live and during the Showcase.
+
+Artists raise a hand with an optional note. Owners **Pick** up to the number of spots (and can **Remove** a pick, which reopens the spot), then **Pay** each artist when the work is done. Payments are announced in the lobby, show in the ledger and can be undone. The admin bar shows **Label jobs to pay**. Students see the count of hands and who was picked, plus their own status (Picked, then Paid).
+
 ## Deal deadlines
 
 A deal's "due in X days" counts **school days**: weekends don't count. It starts the day the label approves the deal, and work is due by the end of the Xth weekday (11:59 PM school time). Approved Friday with 1 day is due at the end of Monday; approved on a weekend, counting starts Monday. School time is `America/New_York`, which can be changed with the `SCHOOL_TZ` environment variable. Holidays aren't skipped. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).

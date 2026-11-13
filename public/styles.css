@@ -770,3 +770,13 @@ input[type=time] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; b
 .booking .bk-clash { display: flex; gap: 6px; align-items: center; margin-top: 5px; color: var(--red); font-weight: 700; font-size: 12.5px; }
 .booking .bk-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 @media (max-width: 760px) { .booking { grid-template-columns: 1fr; } .booking .bk-side { align-items: flex-start; } }
+
+/* ---------- label jobs ---------- */
+.label-jobs .card-head h3 svg.bird { fill: #fff; margin-right: 4px; }
+.request.label-job { border-left: 4px solid var(--red); }
+.request .label-av { display: inline-grid; place-items: center; width: 32px; height: 32px; background: var(--red); flex: none; }
+.request .label-av svg { fill: #fff; }
+.request .rq-amt small { font-size: 11px; font-weight: 600; color: var(--dk); }
+.request .hand .hand-acts { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.request .hand .hand-acts .btn { margin-left: 0; }
+.request .rq-head .dim svg { width: 11px; height: 11px; vertical-align: -1px; margin-right: 2px; }

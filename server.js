@@ -596,11 +596,15 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
       const mine = isOwner || q.user_id === me.id;
       let amount = null;
       try { amount = G.priceJob(game, { jobId: q.job_id, pricing: q.pricing, quantity: q.quantity }).amount; } catch {}
+      const label = q.kind === 'label';
+      if (label) amount = Number(q.amount);
+      const myApp = apps.find((a) => a.user_id === me.id);
       return {
-        id: q.id, userId: q.user_id, jobId: q.job_id, pricing: q.pricing, quantity: q.quantity, dueDays: q.due_days, details: q.details,
+        id: q.id, kind: q.kind, userId: q.user_id, jobId: q.job_id, pricing: q.pricing, quantity: q.quantity, dueDays: q.due_days, details: q.details,
         status: q.status, contractId: q.contract_id, createdAt: q.created_at, amount,
-        applicants: mine ? apps.map((a) => ({ userId: a.user_id, note: a.note, at: a.created_at })) : undefined,
-        applicantCount: apps.length, applied: apps.some((a) => a.user_id === me.id),
+        ...(label ? { payoutId: q.payout_id, spots: q.spots, whenText: q.when_text, picked: apps.filter((a) => a.status !== 'applied').map((a) => a.user_id) } : {}),
+        applicants: mine ? apps.map((a) => ({ userId: a.user_id, note: a.note, at: a.created_at, status: a.status })) : undefined,
+        applicantCount: apps.length, applied: !!myApp, myStatus: myApp?.status || null,
       };
     }),
     serverTime: Date.now(),
@@ -887,7 +891,7 @@ app.post('/api/games/:gameId/requests', auth, async (req, res) => {
   const price = G.priceJob(game, b); // validates the job, pricing and quantity
   const dueDays = b.dueDays ? int(b.dueDays, 'Due in (school days)', { min: 1, max: G.MAX_DAYS }) : null;
   const details = str(b.details, 'Details', { max: 500 });
-  const open = (await db.get("SELECT COUNT(*) AS n FROM job_requests WHERE game_id = ? AND user_id = ? AND status = 'open'", game.id, req.user.id)).n;
+  const open = (await db.get("SELECT COUNT(*) AS n FROM job_requests WHERE game_id = ? AND user_id = ? AND status = 'open' AND kind = 'artist'", game.id, req.user.id)).n;
   if (open >= MAX_OPEN_REQUESTS) fail(`You can have up to ${MAX_OPEN_REQUESTS} open requests. Close one first.`);
   const now = Date.now();
   const { id } = await db.run(
@@ -903,7 +907,7 @@ app.post('/api/requests/:requestId/apply', auth, async (req, res) => {
   const { q, game } = await requestFor(req);
   if (req.user.role !== 'player') fail('Only artists can raise a hand', 403);
   if (q.user_id === req.user.id) fail("You can't apply to your own request");
-  if (q.status !== 'open' || game.status !== 'active') fail('This request is closed');
+  if (q.status !== 'open' || !(game.status === 'active' || (q.kind === 'label' && game.status === 'showcase'))) fail('This request is closed');
   const note = str(req.body?.note, 'Note', { max: 280 });
   await db.run('INSERT INTO job_applicants (request_id, user_id, note, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (request_id, user_id) DO UPDATE SET note = EXCLUDED.note', q.id, req.user.id, note, Date.now());
   await db.run('UPDATE job_requests SET updated_at = ? WHERE id = ?', Date.now(), q.id);
@@ -912,6 +916,8 @@ app.post('/api/requests/:requestId/apply', auth, async (req, res) => {
 
 app.delete('/api/requests/:requestId/apply', auth, async (req, res) => {
   const { q } = await requestFor(req);
+  const mine = await db.get('SELECT status FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, req.user.id);
+  if (mine && mine.status !== 'applied') fail("You've been picked for this. Talk to a Record Owner if you can't do it.");
   await db.run('DELETE FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, req.user.id);
   res.json({ ok: true });
 });
@@ -920,6 +926,7 @@ app.delete('/api/requests/:requestId/apply', auth, async (req, res) => {
 // both agreed to, so it goes straight to the Record Owners for approval.
 app.post('/api/requests/:requestId/hire', auth, async (req, res) => {
   const { q, game } = await requestFor(req);
+  if (q.kind === 'label') fail('Label jobs are picked and paid by the Record Owners');
   if (q.user_id !== req.user.id) fail('Only the artist who posted this can pick someone', 403);
   if (q.status !== 'open') fail('This request is closed');
   const pick = int(req.body?.userId, 'Artist');
@@ -932,6 +939,84 @@ app.post('/api/requests/:requestId/hire', auth, async (req, res) => {
     return cid;
   });
   res.json({ ok: true, contractId });
+});
+
+// ---------- label jobs (owners post paid work from the rate sheet) ----------
+// Volunteering in other classes and studio assistant work: owners post it, artists raise a
+// hand, owners pick up to `spots` artists and pay each one when the work is done.
+app.post('/api/games/:gameId/label-jobs', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (!['active', 'showcase'].includes(game.status)) fail('Label jobs can be posted while the season is live or in the Showcase');
+  const b = req.body || {};
+  const item = R.findItem(R.sheetFor(game).payouts, String(b.payoutId || ''));
+  if (!item || item.type === 'auto') fail('Pick a paid job from the rate sheet');
+  let amount = item.amount; let quantity = null;
+  if (item.type === 'per') { quantity = int(b.quantity, `Number of ${item.per}s`, { min: 1, max: 20 }); amount = item.amount * quantity; }
+  else if (item.type === 'min') amount = int(b.amount, `${item.name} pay`, { min: item.amount, max: 100_000 });
+  const spots = int(b.spots ?? 1, 'Artists needed', { min: 1, max: 10 });
+  const whenText = str(b.whenText, 'When', { max: 100 });
+  const details = str(b.details, 'Details', { max: 500 });
+  const now = Date.now();
+  const { id } = await db.run(
+    "INSERT INTO job_requests (game_id, user_id, kind, job_id, pricing, quantity, payout_id, amount, spots, when_text, details, created_at, updated_at) VALUES (?, ?, 'label', ?, 'label', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+    game.id, req.user.id, item.id, quantity, item.id, amount, spots, whenText, details, now, now
+  );
+  await G.post(game.id, 'request', req.user.id, `The label is looking for ${spots === 1 ? 'an artist' : `${spots} artists`}: ${item.name}${whenText ? ` (${whenText})` : ''}, paying ${G.fmt$(amount)}${spots > 1 ? ' each' : ''}. Raise your hand on the Job Board.`);
+  res.json({ id });
+});
+
+async function labelJobFor(req) {
+  const r = await requestFor(req);
+  if (r.q.kind !== 'label') fail("That isn't a label job");
+  return r;
+}
+
+// Pick an artist who raised a hand (up to the number of spots).
+app.post('/api/requests/:requestId/pick', auth, ownerOnly, async (req, res) => {
+  const { q } = await labelJobFor(req);
+  if (q.status !== 'open') fail('This job is closed');
+  const uid = int(req.body?.userId, 'Artist');
+  await tx(async () => {
+    const a = await db.get('SELECT status FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, uid);
+    if (!a) fail("That artist didn't raise a hand for this");
+    if (a.status !== 'applied') fail('Already picked');
+    const picked = (await db.get("SELECT COUNT(*) AS n FROM job_applicants WHERE request_id = ? AND status <> 'applied'", q.id)).n;
+    if (picked >= q.spots) fail(`All ${q.spots} ${q.spots === 1 ? 'spot is' : 'spots are'} taken`);
+    await db.run("UPDATE job_applicants SET status = 'picked' WHERE request_id = ? AND user_id = ?", q.id, uid);
+    await db.run(`UPDATE job_requests SET updated_at = ?, status = CASE WHEN ? >= spots THEN 'filled' ELSE status END WHERE id = ?`, Date.now(), picked + 1, q.id);
+  });
+  res.json({ ok: true });
+});
+
+// Un-pick (before they're paid): the spot opens again.
+app.post('/api/requests/:requestId/unpick', auth, ownerOnly, async (req, res) => {
+  const { q } = await labelJobFor(req);
+  const uid = int(req.body?.userId, 'Artist');
+  const a = await db.get('SELECT status FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, uid);
+  if (!a || a.status !== 'picked') fail('Only a picked artist who has not been paid can be removed');
+  await db.run("UPDATE job_applicants SET status = 'applied' WHERE request_id = ? AND user_id = ?", q.id, uid);
+  if (q.status === 'filled') await db.run("UPDATE job_requests SET status = 'open', updated_at = ? WHERE id = ?", Date.now(), q.id);
+  else await db.run('UPDATE job_requests SET updated_at = ? WHERE id = ?', Date.now(), q.id);
+  res.json({ ok: true });
+});
+
+// The work is done: pay the artist the job's amount (a label payment, so it can be undone).
+app.post('/api/requests/:requestId/pay', auth, ownerOnly, async (req, res) => {
+  const { q, game } = await labelJobFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const uid = int(req.body?.userId, 'Artist');
+  const item = R.findItem(R.sheetFor(game).payouts, q.payout_id);
+  await tx(async () => {
+    const a = await db.get('SELECT status FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, uid);
+    if (!a || a.status !== 'picked') fail(a?.status === 'paid' ? 'Already paid' : 'Pick the artist first');
+    const label = `${item?.name || 'Label job'}${q.when_text ? ` (${q.when_text})` : ''}`.slice(0, 140);
+    await G.ledgerEntry(game.id, uid, Number(q.amount), 'grant', { memo: label, by: req.user.id });
+    const entry = await db.get('SELECT id FROM ledger WHERE game_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1', game.id, uid);
+    await db.run("UPDATE job_applicants SET status = 'paid', paid_entry = ? WHERE request_id = ? AND user_id = ?", entry.id, q.id, uid);
+    await db.run('UPDATE job_requests SET updated_at = ? WHERE id = ?', Date.now(), q.id);
+    await G.post(game.id, 'grant', req.user.id, `The label paid ${await G.nameOf(uid)} ${G.fmt$(q.amount)} for ${(item?.name || 'a label job').toLowerCase()}.`);
+  });
+  res.json({ ok: true });
 });
 
 app.post('/api/requests/:requestId/close', auth, async (req, res) => {
@@ -1109,7 +1194,7 @@ async function exportData(game, viewer) {
     challenge_entries: (await db.all('SELECT e.*, c.status AS c_status, c.ends_at AS c_ends FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? ORDER BY e.challenge_id, e.created_at', game.id))
       .filter((x) => isOwner || x.user_id === viewer.id || x.c_status !== 'active' || Date.now() >= x.c_ends)
       .map(({ c_status, c_ends, ...x }) => x),
-    job_requests: await db.all('SELECT id, user_id, job_id, pricing, quantity, due_days, details, status, contract_id, created_at FROM job_requests WHERE game_id = ? ORDER BY id', game.id),
+    job_requests: await db.all('SELECT id, kind, user_id, job_id, pricing, quantity, due_days, payout_id, amount, spots, when_text, details, status, contract_id, created_at FROM job_requests WHERE game_id = ? ORDER BY id', game.id),
   };
 }
 

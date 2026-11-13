@@ -46,6 +46,7 @@ fresh cr_prof; start cr_prof "tester:0000:Tester" && node "$T/profiles.test.js" 
 fresh cr_tools; start cr_tools "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_tools" node "$T/class-tools.test.js" "$OUT" > "$OUT/tools.txt" 2>&1; stop; record "Job board, deadlines, class mode, undo, paste roster, reports" "$OUT/tools.txt"
 fresh cr_chal; start cr_chal "tester:0000:Tester" && node "$T/challenges.test.js" "$OUT" > "$OUT/challenges.txt" 2>&1; stop; record "Studio challenges (date ranges, entries, winners)" "$OUT/challenges.txt"
 fresh cr_studio; start cr_studio "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_studio" node "$T/studio.test.js" "$OUT" > "$OUT/studio.txt" 2>&1; stop; record "Studio time requests" "$OUT/studio.txt"
+fresh cr_lj; start cr_lj "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_lj" node "$T/label-jobs.test.js" "$OUT" > "$OUT/labeljobs.txt" 2>&1; stop; record "Label jobs (owners post paid work)" "$OUT/labeljobs.txt"
 fresh cr_class; start cr_class "$OWN" && node "$T/classroom.test.js" "$OUT" > "$OUT/class.txt" 2>&1; record "Classroom flows (30 students)" "$OUT/class.txt"
 if [ $HAVE_UI = 1 ]; then node "$T/every-page.ui.js" "$OUT" 2>&1 | grep -v "401 (Unauthorized)" > "$OUT/pages.txt"; [ -s "$OUT/pages.txt" ] || echo "no problems" > "$OUT/pages.txt"; record "Every page, student + owner, phone + laptop" "$OUT/pages.txt" "no problems"; fi
 node "$T/drift.js" save "$OUT" >/dev/null 2>&1; stop; start cr_class "$OWN"; node "$T/drift.js" compare "$OUT" > "$OUT/drift.txt" 2>&1; record "Shared cache matches the database" "$OUT/drift.txt" "PASS cached"
@@ -63,6 +64,7 @@ if [ $HAVE_UI = 1 ]; then
   fresh cr_chalui; start cr_chalui "tester:0000:Tester" && node "$T/challenges.ui.js" "$OUT" > "$OUT/chalui.txt" 2>&1; stop; record "Studio challenges in the browser" "$OUT/chalui.txt"
   fresh cr_guide2; start cr_guide2 "tester:0000:Tester" && node "$T/guide.ui.js" "$OUT" > "$OUT/guideui.txt" 2>&1; stop; record "Release Guide hidden until an owner opens it" "$OUT/guideui.txt"
   fresh cr_studioui; start cr_studioui "tester:0000:Tester" && node "$T/studio.ui.js" "$OUT" > "$OUT/studioui.txt" 2>&1; stop; record "Studio requests in the browser" "$OUT/studioui.txt"
+  fresh cr_ljui; start cr_ljui "tester:0000:Tester" && node "$T/label-jobs.ui.js" "$OUT" > "$OUT/ljui.txt" 2>&1; stop; record "Label jobs in the browser" "$OUT/ljui.txt"
   fresh cr_sync; start cr_sync "$OWN" && node "$T/sync-owners.ui.js" "$OUT" > "$OUT/sync.txt" 2>&1; stop; record "Change check and two-owner sync" "$OUT/sync.txt"
 else echo "SKIP  Browser suites (Playwright not available)" >> "$SUMMARY"; fi
 n=$(grep -ciE "error|unhandled" "$OUT/server.log" 2>/dev/null); echo "INFO  Server log errors: ${n:-0}" >> "$SUMMARY"
