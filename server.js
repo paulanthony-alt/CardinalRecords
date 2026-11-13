@@ -571,6 +571,15 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
       id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at,
       reverses: l.reverses || null, undone: reversed.has(l.id), by: isOwner ? l.created_by : undefined,
     })),
+    // Studio: owners see every request; students see their own, plus the approved schedule (who and when).
+    bookings: (e.bookings || []).filter((x) => isOwner || x.user_id === me.id || x.status === 'approved').map((x) => {
+      const mineOrOwner = isOwner || x.user_id === me.id;
+      return {
+        id: x.id, userId: x.user_id, startsAt: x.starts_at, minutes: x.minutes, status: x.status,
+        purpose: mineOrOwner ? x.purpose : '', guests: mineOrOwner ? x.guests : '', note: mineOrOwner ? x.owner_note : '',
+        decidedAt: x.decided_at, createdAt: x.created_at,
+      };
+    }),
     challenges: (e.challenges || []).map((c) => {
       const all = (e.entries || []).filter((x) => x.challenge_id === c.id);
       const closed = c.status !== 'active' || Date.now() >= c.ends_at;
@@ -676,6 +685,72 @@ app.post('/api/games/:gameId/players/bulk', auth, ownerOnly, async (req, res) =>
 app.post('/api/ledger/:entryId/reverse', auth, ownerOnly, async (req, res) => {
   const r = await G.reverseEntry(int(req.params.entryId, 'Transaction'), req.user);
   res.json({ ok: true, id: r.id });
+});
+
+// ---------- studio time ----------
+const STUDIO_LENGTHS = [30, 45, 60, 90, 120, 150, 180, 240];
+const MAX_PENDING_BOOKINGS = 5;
+async function bookingFor(req) {
+  const b = await db.get('SELECT * FROM studio_bookings WHERE id = ?', int(req.params.bookingId, 'Booking'));
+  if (!b) fail('That studio request is gone', 404);
+  if (req.user.role !== 'owner' && req.user.game_id !== b.game_id) fail('Not your label', 403);
+  return { b, game: await G.getGame(b.game_id) };
+}
+
+// A student asks for studio time. The day and start time come from their browser, as one timestamp.
+app.post('/api/games/:gameId/studio', auth, async (req, res) => {
+  const game = await gameFor(req);
+  if (req.user.role !== 'player') fail('Only artists request studio time', 403);
+  if (!['active', 'showcase'].includes(game.status)) fail('Studio requests open once the season starts');
+  const b = req.body || {};
+  const startsAt = int(b.startsAt, 'Day and start time', { min: 0 });
+  if (startsAt < Date.now() - 5 * 60_000) fail('Pick a time that hasn\'t passed yet');
+  if (startsAt > Date.now() + 120 * G.DAY) fail('You can book up to 120 days ahead');
+  const minutes = int(b.minutes, 'Length', { min: 15, max: 480 });
+  if (!STUDIO_LENGTHS.includes(minutes)) fail('Pick a length from the list');
+  const purpose = str(b.purpose, 'What you\'re recording', { min: 3, max: 300 });
+  const guests = str(b.guests, "Who's coming", { max: 200 });
+  const open = (await db.get("SELECT COUNT(*) AS n FROM studio_bookings WHERE game_id = ? AND user_id = ? AND status = 'pending'", game.id, req.user.id)).n;
+  if (open >= MAX_PENDING_BOOKINGS) fail(`You have ${MAX_PENDING_BOOKINGS} requests waiting already. Wait for an answer or cancel one.`);
+  const now = Date.now();
+  const { id } = await db.run('INSERT INTO studio_bookings (game_id, user_id, starts_at, minutes, purpose, guests, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    game.id, req.user.id, startsAt, minutes, purpose, guests, now, now);
+  res.json({ id });
+});
+
+// Owners approve or decline (with an optional note); students can cancel their own.
+app.post('/api/studio/:bookingId/decide', auth, ownerOnly, async (req, res) => {
+  const { b } = await bookingFor(req);
+  const action = String(req.body?.action || '');
+  const note = str(req.body?.note, 'Note', { max: 300 });
+  const to = { approve: 'approved', decline: 'declined', cancel: 'cancelled' }[action];
+  if (!to) fail('Unknown action');
+  if (action === 'cancel' ? !['pending', 'approved'].includes(b.status) : b.status !== 'pending') fail('That request was already answered');
+  await db.run('UPDATE studio_bookings SET status = ?, owner_note = ?, decided_by = ?, decided_at = ?, updated_at = ? WHERE id = ?', to, note, req.user.id, Date.now(), Date.now(), b.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/studio/:bookingId/cancel', auth, async (req, res) => {
+  const { b } = await bookingFor(req);
+  if (b.user_id !== req.user.id) fail('Only the artist who asked can cancel it', 403);
+  if (!['pending', 'approved'].includes(b.status)) fail('That request is already closed');
+  if (b.status === 'approved' && Date.now() >= b.starts_at) fail('That session has already started');
+  await db.run("UPDATE studio_bookings SET status = 'cancelled', updated_at = ? WHERE id = ?", Date.now(), b.id);
+  res.json({ ok: true });
+});
+
+// After an approved session's start time: the artist didn't show. Charges the rate sheet's no-show fee (undoable).
+app.post('/api/studio/:bookingId/noshow', auth, ownerOnly, async (req, res) => {
+  const { b, game } = await bookingFor(req);
+  if (b.status !== 'approved') fail('Only approved sessions can be marked as a no-show');
+  if (Date.now() < b.starts_at) fail("That session hasn't started yet");
+  if (game.status === 'archived') fail('This season is archived');
+  const fee = R.findItem(R.sheetFor(game).fines, 'studio-no-show');
+  await tx(async () => {
+    await db.run("UPDATE studio_bookings SET status = 'noshow', decided_by = ?, updated_at = ? WHERE id = ?", req.user.id, Date.now(), b.id);
+    if (fee?.amount > 0) await G.ledgerEntry(game.id, b.user_id, -fee.amount, 'fine', { memo: `${fee.name}: ${new Date(Number(b.starts_at)).toISOString().slice(0, 10)}`, by: req.user.id });
+  });
+  res.json({ ok: true, fee: fee?.amount || 0 });
 });
 
 // ---------- studio challenges ----------
@@ -1027,6 +1102,9 @@ async function exportData(game, viewer) {
       ? await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)
       : (await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)).filter((f) => LB.studentCanSee(f, LB.lobbyOf(game))).map(({ hidden, ...f }) => f),
     tracks: await db.all('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id', game.id),
+    studio_bookings: isOwner
+      ? await db.all('SELECT * FROM studio_bookings WHERE game_id = ? ORDER BY starts_at', game.id)
+      : await db.all('SELECT * FROM studio_bookings WHERE game_id = ? AND user_id = ? ORDER BY starts_at', game.id, viewer.id),
     challenges: (await db.all('SELECT id, title, description, starts_at, ends_at, prizes, status, created_at FROM challenges WHERE game_id = ? ORDER BY id', game.id)),
     challenge_entries: (await db.all('SELECT e.*, c.status AS c_status, c.ends_at AS c_ends FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? ORDER BY e.challenge_id, e.created_at', game.id))
       .filter((x) => isOwner || x.user_id === viewer.id || x.c_status !== 'active' || Date.now() >= x.c_ends)
@@ -1116,6 +1194,7 @@ async function purgeSeason(gameId) {
   await db.run('DELETE FROM services WHERE game_id = ?', gameId);
   await db.run('DELETE FROM job_requests WHERE game_id = ?', gameId); // applicants go with them
   await db.run('DELETE FROM challenges WHERE game_id = ?', gameId); // entries go with them
+  await db.run('DELETE FROM studio_bookings WHERE game_id = ?', gameId);
   const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
     AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
     AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)

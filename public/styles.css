@@ -754,3 +754,19 @@ input[type=date] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; b
 .challenge .entry .entry-note { font-size: 12.5px; }
 .challenge .entry .btn { margin-left: auto; }
 .challenge .c-actions { margin-top: 10px; }
+
+/* ---------- studio time ---------- */
+input[type=time] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; background: var(--paper); box-shadow: var(--sunk); font: inherit; font-size: 13px; }
+.bookings { display: grid; gap: 6px; }
+.booking { display: grid; grid-template-columns: 190px 1fr auto; gap: 12px; align-items: start; padding: 9px 12px; background: var(--paper); box-shadow: var(--raised-soft); border-left: 4px solid var(--lo); }
+.booking.st-pending { border-left-color: var(--brass); }
+.booking.st-approved { border-left-color: var(--ok); }
+.booking.st-declined, .booking.st-cancelled, .booking.st-noshow { opacity: .75; }
+.booking .bk-when b { display: block; font-size: 13.5px; }
+.booking .bk-when small { color: var(--dk); }
+.booking .bk-purpose { margin-top: 2px; }
+.booking .bk-note { display: flex; gap: 6px; align-items: center; margin-top: 5px; padding: 4px 8px; background: var(--note); font-size: 12.5px; }
+.booking .bk-note svg, .booking .bk-clash svg { width: 12px; height: 12px; flex: none; }
+.booking .bk-clash { display: flex; gap: 6px; align-items: center; margin-top: 5px; color: var(--red); font-weight: 700; font-size: 12.5px; }
+.booking .bk-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+@media (max-width: 760px) { .booking { grid-template-columns: 1fr; } .booking .bk-side { align-items: flex-start; } }

@@ -340,6 +340,7 @@ async function writeReportPdf(out, game, opts = {}) {
   }
   const chats = new Map((await db.all("SELECT actor_id AS k, COUNT(*) AS n FROM feed WHERE game_id = ? AND kind = 'chat' GROUP BY actor_id", game.id)).map((r) => [r.k, r.n]));
   const challengeRows = await db.all('SELECT e.user_id, e.place FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? AND c.status <> ?', game.id, 'cancelled');
+  const studio = await db.all("SELECT user_id, status FROM studio_bookings WHERE game_id = ? AND status IN ('approved', 'noshow')", game.id);
   const steps = guideSteps();
   const jobName = (c) => s.sheet.jobs.find((j) => j.id === c.job_id)?.name || c.title;
   const KIND = { advance: 'Signing advance', grant: 'Label payment', bonus: 'Game bonus', fine: 'Fee / fine' };
@@ -359,7 +360,8 @@ async function writeReportPdf(out, game, opts = {}) {
     const done = Object.keys(r.tutorial?.done || {}).filter((k) => steps.includes(k)).length;
     return { p, sold, bought, withDue, late, overdue, mine, tracks, done,
       payments: sum(['grant', 'bonus']), fines: -sum(['fine']), chats: chats.get(p.id) || 0,
-      entered: challengeRows.filter((x) => x.user_id === p.id).length, won: challengeRows.filter((x) => x.user_id === p.id && x.place).length };
+      entered: challengeRows.filter((x) => x.user_id === p.id).length, won: challengeRows.filter((x) => x.user_id === p.id && x.place).length,
+      sessions: studio.filter((x) => x.user_id === p.id).length, noshows: studio.filter((x) => x.user_id === p.id && x.status === 'noshow').length };
   };
   const cards = students.map(cardFor);
 
@@ -400,7 +402,7 @@ async function writeReportPdf(out, game, opts = {}) {
       ['Fees and fines', c.fines ? `-${money(c.fines)}` : money(0), 'Average rating from clients', st.rating ? `${st.rating} / 5` : 'No ratings yet'],
       ['Showcase tracks / likes', `${c.tracks.length} / ${st.likes}`, 'Release Guide', `${c.done} of ${steps.length} steps${r.tutorial?.completedAt ? ' (finished)' : ''}`],
       ['Lobby messages posted', String(c.chats), 'Studio challenges entered / placed', `${c.entered} / ${c.won}`],
-      ['', '', 'Badges', r.badges.map((b) => b.name).join(', ') || 'None yet'],
+      ['Studio sessions booked / no-shows', `${c.sessions} / ${c.noshows}`, 'Badges', r.badges.map((b) => b.name).join(', ') || 'None yet'],
     ], game.name, { size: 8.5 });
     if (c.p.profile_url) { doc.font('Helvetica').fontSize(8.5).fillColor('#1a1a1a').text(clean(`Artist profile: ${c.p.profile_url}`), L, doc.y, { width: W }); doc.moveDown(0.6); }
 

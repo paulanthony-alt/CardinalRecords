@@ -159,6 +159,25 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 ALTER TABLE ledger ADD COLUMN IF NOT EXISTS reverses INTEGER;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_reverses ON ledger(reverses) WHERE reverses IS NOT NULL;
 
+-- Studio time: students request a session (day, start, length, what for, who's coming);
+-- Record Owners approve or decline it, and can mark a no-show (rate sheet fee).
+CREATE TABLE IF NOT EXISTS studio_bookings (
+  id          SERIAL  PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
+  starts_at   BIGINT  NOT NULL,
+  minutes     INTEGER NOT NULL,
+  purpose     TEXT    NOT NULL DEFAULT '',
+  guests      TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'pending',  -- pending | approved | declined | cancelled | noshow
+  owner_note  TEXT    NOT NULL DEFAULT '',
+  decided_by  INTEGER,
+  decided_at  BIGINT,
+  created_at  BIGINT  NOT NULL,
+  updated_at  BIGINT  NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_studio_game ON studio_bookings(game_id, starts_at);
+
 -- Release Guide: hidden from students until a Record Owner opens it (per season).
 ALTER TABLE games ADD COLUMN IF NOT EXISTS guide_open INTEGER NOT NULL DEFAULT 0;
 

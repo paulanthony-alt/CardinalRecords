@@ -443,6 +443,7 @@ function navItems() {
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'jobs', label: 'Job Board', ic: 'bag', count: myRequestsWithHands() },
     { to: 'challenges', label: 'Challenges', ic: 'award', count: challengesToEnter() },
+    { to: 'studio', label: 'Studio', ic: 'clock', count: isOwner() ? studioPending().length : 0 },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
     { group: 'Season Finale' },
@@ -515,6 +516,7 @@ function adminBar(route) {
     ${item('#/admin/review', 'Review', review, review > 0)}
     ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
     ${challengesToJudge().length ? item('#/challenges', 'To judge', challengesToJudge().length, true) : ''}
+    ${studioPending().length ? item('#/studio', 'Studio requests', studioPending().length, true) : ''}
     ${item('#/admin/lobby', 'Hidden posts', hidden)}
     ${item('#/admin/lobby', 'Muted', muted)}
     ${unclaimed ? item('#/admin/roster', 'Not signed in', unclaimed, true) : ''}
@@ -1306,6 +1308,72 @@ function classModeView() {
     <p class="dim" style="font-size:12.5px;margin-top:10px">Other fees, custom amounts and charging several students at once are in <a href="#/admin/treasury">Treasury &amp; fines</a>. Overdue deals: ${overdueDeals().length ? `<a href="#/admin/review">${plural(overdueDeals().length, 'deal')}</a>` : 'none'}.</p></div>`;
 }
 
+// ---------- studio time ----------
+const studioPending = () => (S.state?.bookings || []).filter((b) => b.status === 'pending');
+const STUDIO_LEN = [[30, '30 minutes'], [45, '45 minutes'], [60, '1 hour'], [90, '1½ hours'], [120, '2 hours'], [150, '2½ hours'], [180, '3 hours'], [240, '4 hours']];
+const lenText = (m) => STUDIO_LEN.find(([v]) => v === m)?.[1] || `${m} minutes`;
+const timeText = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const sessionText = (b) => `${new Date(b.startsAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeText(b.startsAt)}–${timeText(b.startsAt + b.minutes * 60_000)}`;
+/** Approved sessions that overlap this one (so owners don't double-book the studio). */
+const overlaps = (b) => (S.state.bookings || []).filter((x) => x.id !== b.id && x.status === 'approved'
+  && x.startsAt < b.startsAt + b.minutes * 60_000 && b.startsAt < x.startsAt + x.minutes * 60_000);
+const BOOK_CHIP = { pending: ['s-review', 'Waiting for a teacher'], approved: ['s-completed', 'Approved'], declined: ['s-cancelled', 'Declined'], cancelled: ['s-cancelled', 'Cancelled'], noshow: ['s-cancelled', 'No-show'] };
+
+function bookingRow(b, { owner = false } = {}) {
+  const [cls, label] = BOOK_CHIP[b.status];
+  const past = Date.now() >= b.startsAt;
+  const clash = owner && ['pending', 'approved'].includes(b.status) ? overlaps(b) : [];
+  const acts = [];
+  if (owner && b.status === 'pending') acts.push(`<button class="btn sm primary" data-act="studio-decide" data-id="${b.id}" data-a="approve">${icon('check')}Approve</button>`, `<button class="btn sm danger" data-act="studio-decide" data-id="${b.id}" data-a="decline">Decline</button>`);
+  if (owner && b.status === 'approved' && past) acts.push(`<button class="btn sm danger" data-act="studio-noshow" data-id="${b.id}">No-show</button>`);
+  if (owner && b.status === 'approved' && !past) acts.push(`<button class="btn sm ghost" data-act="studio-decide" data-id="${b.id}" data-a="cancel">Cancel session</button>`);
+  if (!owner && b.userId === S.user.id && (b.status === 'pending' || (b.status === 'approved' && !past))) acts.push(`<button class="btn sm ghost" data-act="studio-cancel" data-id="${b.id}">Cancel</button>`);
+  return `<div class="booking st-${b.status}"><div class="bk-when"><b>${sessionText(b)}</b><small>${lenText(b.minutes)}</small></div>
+    <div class="bk-main">${owner || b.userId !== S.user.id ? `<div>${nameLine(b.userId)}</div>` : ''}
+      ${b.purpose ? `<div class="bk-purpose">${esc(b.purpose)}</div>` : ''}${b.guests ? `<div class="dim" style="font-size:12.5px">With: ${esc(b.guests)}</div>` : ''}
+      ${b.note ? `<div class="bk-note">${icon('message')}${esc(b.note)}</div>` : ''}
+      ${clash.length ? `<div class="bk-clash">${icon('flag')}Overlaps ${clash.map((x) => `${esc(nameOf(x.userId))} (${timeText(x.startsAt)}–${timeText(x.startsAt + x.minutes * 60_000)})`).join(', ')}</div>` : ''}</div>
+    <div class="bk-side"><span class="chip ${cls}">${label}</span>${acts.length ? `<div class="c-actions">${acts.join('')}</div>` : ''}</div></div>`;
+}
+
+function studioView() {
+  const st = S.state; const m = me(); const all = st.bookings || [];
+  const now = Date.now();
+  const schedule = all.filter((b) => b.status === 'approved' && b.startsAt + b.minutes * 60_000 > now).sort((a, b) => a.startsAt - b.startsAt);
+  const canAsk = m && ['active', 'showcase'].includes(st.game.status);
+  const tomorrow = new Date(now + 86_400_000);
+  const ymdLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const scheduleCard = `<div class="card"><div class="card-head"><h3>${icon('clock')}Studio schedule</h3><span class="more">${plural(schedule.length, 'session')} coming up</span></div>
+    ${schedule.length ? `<div class="bookings">${schedule.map((b) => bookingRow(b, { owner: isOwner() })).join('')}</div>` : '<p class="muted">No approved sessions coming up.</p>'}</div>`;
+  if (isOwner()) {
+    const pending = all.filter((b) => b.status === 'pending').sort((a, b) => a.startsAt - b.startsAt);
+    const toCheck = all.filter((b) => b.status === 'approved' && b.startsAt <= now && b.startsAt > now - 7 * 86_400_000);
+    const past = all.filter((b) => ['declined', 'cancelled', 'noshow'].includes(b.status) || (b.status === 'approved' && b.startsAt + b.minutes * 60_000 <= now)).sort((a, b) => b.startsAt - a.startsAt).slice(0, 25);
+    return `${pageHead('The Label', 'Studio', 'Students ask for studio time here. Approve or decline each request; approved sessions go on the schedule everyone sees.')}
+      <div class="card"><div class="card-head"><h3>${icon('shield')}Requests to review</h3><span class="more">${pending.length}</span></div>
+        ${pending.length ? `<div class="bookings">${pending.map((b) => bookingRow(b, { owner: true })).join('')}</div>` : '<p class="muted">No requests waiting.</p>'}</div>
+      ${scheduleCard}
+      ${toCheck.length ? `<div class="card"><div class="card-head"><h3>${icon('flag')}Did they show up?</h3></div><p class="muted" style="margin-top:-4px">Sessions from the last week. <b>No-show</b> charges the rate sheet's studio no-show fee (you can undo it).</p>
+        <div class="bookings">${toCheck.map((b) => bookingRow(b, { owner: true })).join('')}</div></div>` : ''}
+      ${past.length ? `<div class="card"><div class="card-head"><h3>${icon('clock')}Past and closed</h3></div><div class="bookings">${past.map((b) => bookingRow(b, { owner: true })).join('')}</div></div>` : ''}`;
+  }
+  const mine = all.filter((b) => b.userId === S.user.id).sort((a, b) => b.startsAt - a.startsAt);
+  return `${pageHead('The Label', 'Studio', 'Ask for time in the recording studio. A teacher approves or declines each request.')}
+    ${canAsk ? `<form class="card" data-form="studio-request"><div class="card-head"><h3>${icon('plus')}Request studio time</h3></div>
+      <div class="row">
+        <label class="field"><span>Day</span><input name="day" type="date" required min="${ymdLocal(new Date())}" value="${ymdLocal(tomorrow)}" /></label>
+        <label class="field"><span>Start time</span><input name="time" type="time" required value="09:00" step="900" /></label>
+        <label class="field"><span>How long</span><select name="minutes">${STUDIO_LEN.map(([v, l]) => `<option value="${v}" ${v === 60 ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </div>
+      <label class="field"><span>What are you recording?</span><input name="purpose" required minlength="3" maxlength="300" placeholder="Lead vocals for my single" /></label>
+      <label class="field"><span>Who's coming? (optional)</span><input name="guests" maxlength="200" placeholder="Jordan (engineer), Maya (background vocals)" /></label>
+      <p class="dim" style="font-size:12.5px">Check the schedule below for open times. Can't make it? Cancel before your session; a no-show is charged the rate sheet's studio fee.</p>
+      <button class="btn primary">${icon('send')}Send request</button></form>` : `<div class="note">${icon('lock')}Studio requests open once the season starts.</div>`}
+    <div class="card"><div class="card-head"><h3>${icon('file')}My requests</h3><span class="more">${mine.length}</span></div>
+      ${mine.length ? `<div class="bookings">${mine.map((b) => bookingRow(b)).join('')}</div>` : '<p class="muted">No requests yet.</p>'}</div>
+    ${scheduleCard}`;
+}
+
 // ---------- studio challenges ----------
 /** Where a challenge is right now, worked out from its dates (they pass without anyone clicking). */
 function challengePhase(c, now = Date.now()) {
@@ -1709,6 +1777,7 @@ function viewFor() {
     case 'contracts': return contractsView();
     case 'jobs': return jobsView();
     case 'challenges': return challengesView();
+    case 'studio': return studioView();
     case 'contract': return contractDetailView(id);
     case 'roster': return rosterView();
     case 'artist': return artistView(id);
@@ -1818,6 +1887,25 @@ const ACTIONS = {
   'paste-roster': () => pasteRosterModal(),
   // 2. job board
   'request-new': () => hireModal({ request: true }),
+  'studio-decide': (el) => {
+    const b = S.state.bookings.find((x) => x.id === Number(el.dataset.id));
+    const a = el.dataset.a;
+    const clash = a === 'approve' ? overlaps(b) : [];
+    const title = { approve: 'Approve this session?', decline: 'Decline this request?', cancel: 'Cancel this session?' }[a];
+    modal(`${modalHead(title, `${esc(nameOf(b.userId))} · ${sessionText(b)} · ${esc(b.purpose)}`)}
+      ${clash.length ? `<div class="note">${icon('flag')}Overlaps ${clash.map((x) => esc(nameOf(x.userId))).join(', ')}, already approved for that time.</div>` : ''}
+      <form data-form="studio-decide"><input type="hidden" name="id" value="${b.id}" /><input type="hidden" name="action" value="${a}" />
+        <label class="field"><span>Note to ${esc(nameOf(b.userId).split(' ')[0])} (optional)</span><input name="note" maxlength="300" placeholder="${a === 'approve' ? 'Bring your session files' : 'The studio is booked then. Try Thursday?'}" /></label>
+        <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Back</button><button class="btn ${a === 'approve' ? 'primary' : 'danger'}">${{ approve: 'Approve', decline: 'Decline', cancel: 'Cancel session' }[a]}</button></div></form>`);
+  },
+  'studio-cancel': (el) => confirmModal('Cancel this request?', 'The time goes back to everyone else.', 'Cancel request', 'danger',
+    () => act(() => api('POST', `/api/studio/${el.dataset.id}/cancel`), 'Request cancelled')),
+  'studio-noshow': (el) => {
+    const b = S.state.bookings.find((x) => x.id === Number(el.dataset.id));
+    const fee = S.state.rates.fines.find((f) => f.id === 'studio-no-show');
+    confirmModal('Mark as a no-show?', `${esc(nameOf(b.userId))} is charged the ${money(fee?.amount || 0)} studio no-show fee from the rate sheet. You can undo it in Treasury.`, 'No-show', 'danger',
+      () => act(() => api('POST', `/api/studio/${b.id}/noshow`), 'Marked as a no-show'));
+  },
   'challenge-new': () => challengeModal(),
   'challenge-edit': (el) => challengeModal(S.state.challenges.find((c) => c.id === Number(el.dataset.id))),
   'challenge-end': (el) => confirmModal('End this challenge now?', 'Entries close right away, and you can pick the winners.', 'End now', 'primary',
@@ -2071,6 +2159,14 @@ const FORMS = {
     return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
+  'studio-request': async (d, f) => {
+    const startsAt = new Date(`${d.day}T${d.time}:00`).getTime();
+    if (await act(() => api('POST', `/api/games/${S.gameId}/studio`, { startsAt, minutes: Number(d.minutes), purpose: d.purpose, guests: d.guests }), 'Request sent. A teacher will approve or decline it.')) f.reset();
+  },
+  'studio-decide': async (d) => {
+    const msg = { approve: 'Session approved', decline: 'Request declined', cancel: 'Session cancelled' }[d.action];
+    if (await act(() => api('POST', `/api/studio/${d.id}/decide`, { action: d.action, note: d.note }), msg)) closeModal();
+  },
   challenge: async (d) => {
     const startsAt = new Date(`${d.from}T00:00:00`).getTime();
     const endsAt = new Date(`${d.to}T23:59:59`).getTime();
