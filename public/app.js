@@ -1488,11 +1488,12 @@ const requestWhat = (q) => {
 const labelJobsToPay = () => (S.state?.requests || []).filter((q) => q.kind === 'label' && (q.applicants || []).some((a) => a.status === 'picked'));
 const payoutName = (q) => S.state.rates.payouts.find((p) => p.id === q.payoutId)?.name || 'Label job';
 
-/** A job posted by the label: artists raise a hand; owners pick up to `spots` and pay each when the work is done. */
+/** A job posted by the label: artists raise a hand; owners pick up to `spots` (or any number: "as many as possible") and pay each when the work is done. */
 function labelJobCard(q) {
   const m = me();
   const pickedCount = q.picked.length;
-  const full = pickedCount >= q.spots;
+  const any = q.spots == null; // as many as possible
+  const full = !any && pickedCount >= q.spots;
   const chipMine = { picked: '<span class="chip s-active">You\'re picked!</span>', paid: '<span class="chip s-completed">Paid ✓</span>' }[q.myStatus] || '';
   let actions = '';
   if (q.status === 'open' && m && ['active', 'showcase'].includes(game().status)) {
@@ -1508,9 +1509,9 @@ function labelJobCard(q) {
       : '<p class="dim" style="margin:6px 0 0">No hands raised yet.</p>')
     : `<p class="dim" style="margin:6px 0 0">${plural(q.applicantCount, 'hand')} raised${q.applied ? ' (including yours)' : ''}${pickedCount ? ` · picked: ${q.picked.map((u) => esc(nameOf(u))).join(', ')}` : ''}</p>`;
   const status = q.status === 'closed' ? '<span class="chip s-cancelled">Closed</span>' : full ? '<span class="chip s-completed">All spots filled</span>' : '<span class="chip s-active">Open</span>';
-  return `<div class="request label-job"><div class="rq-head"><span class="av label-av">${bird(18)}</span><div><b>The label</b> is looking for ${q.spots === 1 ? 'an artist' : `<b>${q.spots} artists</b>`}: <b>${esc(payoutName(q))}</b>
-      <div class="dim" style="font-size:12.5px">${q.whenText ? `${icon('clock')}${esc(q.whenText)} · ` : ''}${pickedCount} of ${q.spots} picked · ${ago(q.createdAt)} · ${status} ${chipMine}</div></div>
-    <div class="rq-amt mono">${money(q.amount)}${q.spots > 1 ? '<small> each</small>' : ''}</div></div>
+  return `<div class="request label-job"><div class="rq-head"><span class="av label-av">${bird(18)}</span><div><b>The label</b> is looking for ${any ? '<b>as many artists as possible</b>' : q.spots === 1 ? 'an artist' : `<b>${q.spots} artists</b>`}: <b>${esc(payoutName(q))}</b>
+      <div class="dim" style="font-size:12.5px">${q.whenText ? `${icon('clock')}${esc(q.whenText)} · ` : ''}${any ? `${pickedCount} picked so far` : `${pickedCount} of ${q.spots} picked`} · ${ago(q.createdAt)} · ${status} ${chipMine}</div></div>
+    <div class="rq-amt mono">${money(q.amount)}${any || q.spots > 1 ? '<small> each</small>' : ''}</div></div>
     ${q.details ? `<div class="terms">${esc(q.details)}</div>` : ''}${hands}${actions ? `<div class="c-actions">${actions}</div>` : ''}</div>`;
 }
 
@@ -1524,7 +1525,11 @@ function labelJobModal() {
       <div class="row">
         <label class="field" id="lj-qty" ${first?.type === 'per' ? '' : 'hidden'}><span id="lj-qty-label">Class blocks</span><input name="quantity" type="number" min="1" max="20" value="1" data-input-calc="1" /></label>
         <label class="field" id="lj-amt" ${first?.type === 'min' ? '' : 'hidden'}><span>Pay ($, at least the minimum)</span><input name="amount" type="number" min="0" max="100000" step="1" value="${first?.amount || 0}" data-input-calc="1" /></label>
-        <label class="field"><span>Artists needed</span><input name="spots" type="number" min="1" max="10" value="1" /></label>
+        <div class="field"><span>Artists needed</span>
+          <label class="check"><input type="radio" name="spotsMode" value="set" checked data-change="label-job-spots" /> A set number:
+            <input name="spots" type="number" min="1" max="30" value="1" style="width:70px;margin-left:4px" aria-label="Number of artists" /></label>
+          <label class="check"><input type="radio" name="spotsMode" value="any" data-change="label-job-spots" /> As many as possible</label>
+          <small>"As many as possible" has no limit: pick everyone who can help. It stays open until you close it.</small></div>
       </div>
       <label class="field"><span>When (optional)</span><input name="whenText" maxlength="100" placeholder="Tuesday, 3rd period · Intro to EMusic" /></label>
       <label class="field"><span>Details (optional)</span><textarea name="details" maxlength="500" placeholder="Help set up mics and run the session for EMusic 1."></textarea></label>
@@ -2254,7 +2259,7 @@ const FORMS = {
   },
   'label-job': async (d) => {
     const o = $('#label-job-form').payoutId.selectedOptions[0];
-    const body = { payoutId: d.payoutId, spots: Number(d.spots), whenText: d.whenText, details: d.details };
+    const body = { payoutId: d.payoutId, spots: d.spotsMode === 'any' ? 'any' : Number(d.spots), whenText: d.whenText, details: d.details };
     if (o.dataset.type === 'per') body.quantity = Number(d.quantity);
     if (o.dataset.type === 'min') body.amount = Number(d.amount);
     if (await act(() => api('POST', `/api/games/${S.gameId}/label-jobs`, body), 'Label job posted and announced')) { closeModal(); location.hash = '#/jobs'; }
@@ -2340,6 +2345,8 @@ document.addEventListener('change', async (e) => {
     S.gameId = Number(el.value);
     store.set('cr.game', S.gameId);
     await refresh();
+  } else if (k === 'label-job-spots') {
+    const f = $('#label-job-form'); if (f) f.spots.disabled = f.querySelector('input[name=spotsMode]:checked').value === 'any';
   } else if (k === 'label-job-calc') {
     labelJobCalc(true);
   } else if (k === 'lobby-chat') {
