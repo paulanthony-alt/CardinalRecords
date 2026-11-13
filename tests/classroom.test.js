@@ -134,6 +134,8 @@ const bal = (s, id) => s.roster.find((p) => p.id === id)?.stats.balance;
   check('lobby chat', (await call('k1', 'POST', `/api/games/${g}/feed`, { message: 'hi label <script>x</script>' })).status === 200);
   check('profile save', (await call('k1', 'PUT', '/api/me', { displayName: 'Kid One', roleTitle: 'Producer', bio: 'hey', color: '#123456' })).status === 200);
   check('student PIN change', (await call('k1', 'PUT', '/api/me/pin', { currentPin: '4001', newPin: '5555' })).status === 200);
+  check('Release Guide hidden until opened', (await call('k1', 'PUT', '/api/me/tutorial', { step: 'master', done: true })).status === 403);
+  check('owner opens the Release Guide', (await call('bf', 'POST', `/api/games/${g}/guide`, { open: true })).status === 200);
   check('tutorial step', (await call('k1', 'PUT', '/api/me/tutorial', { step: 'master', done: true })).status === 200);
   check('cannot see another season', (await call('k1', 'GET', `/api/games/${g + 999}/state`)).status === 404);
 

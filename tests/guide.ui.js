@@ -1,0 +1,51 @@
+// Browser: the Release Guide is hidden from students until a Record Owner opens it. Usage: node tests/guide.ui.js OUTDIR
+const { chromium } = require('playwright');
+const out = process.argv[2]; const B = (process.env.BASE || 'http://localhost:3199');
+let pass = 0, failN = 0;
+const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS' : 'FAIL'} ${n}${x ? ' — ' + x : ''}`); };
+(async () => {
+  const browser = await chromium.launch(); const errors = [];
+  const ctxO = await browser.newContext({ viewport: { width: 1366, height: 900 } }); const o = await ctxO.newPage();
+  o.on('pageerror', (e) => errors.push('owner: ' + e.message));
+  const r = ctxO.request;
+  await r.post(`${B}/api/login`, { data: { username: 'tester', pin: '0000' } });
+  const g = (await (await r.post(`${B}/api/games`, { data: { name: 'Guide Test', durationDays: 30 } })).json()).id;
+  const made = await (await r.post(`${B}/api/games/${g}/players/bulk`, { data: { entries: [{ displayName: 'Rae Cole' }] } })).json();
+  const kid = made.created[0];
+  await fetch(`${B}/api/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: kid.username, code: kid.claimCode, pin: '2468' }) });
+  await r.post(`${B}/api/games/${g}/phase`, { data: { phase: 'active' } });
+  await r.post(`${B}/api/games/${g}/phase`, { data: { phase: 'showcase' } });
+  const st0 = await (await r.get(`${B}/api/games/${g}/state`)).json();
+  check('new seasons start with the guide hidden', st0.game.guide_open === 0);
+
+  const s = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  s.on('pageerror', (e) => errors.push('student: ' + e.message));
+  await s.goto(B); await s.fill('input[name="username"]', kid.username); await s.keyboard.press('Enter'); await s.waitForTimeout(300);
+  for (const d of '2468') await s.keyboard.press(d); await s.keyboard.press('Enter'); await s.waitForSelector('.menu .mi'); await s.waitForTimeout(500);
+  check('hidden: not in the student menu', !(await s.locator('.menu .mi', { hasText: 'Release Guide' }).count()));
+  check('hidden: no Release Guide button in the taskbar', !(await s.locator('.task-go', { hasText: 'Release Guide' }).count()));
+  await s.goto(`${B}/#/guide`); await s.reload(); await s.waitForTimeout(800);
+  check('hidden: typing the address shows "not open yet"', (await s.locator('text=The Release Guide isn\'t open yet').count()) === 1 && !(await s.locator('.guide').count()));
+  const blocked = await s.evaluate(async () => (await fetch('/api/me/tutorial', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ step: 'master', done: true }) })).status);
+  check('hidden: progress cannot be saved', blocked === 403);
+
+  await o.goto(B); await o.evaluate((id) => localStorage.setItem('cr.game', id), g); await o.goto(`${B}/#/guide`); await o.reload(); await o.waitForSelector('.guide');
+  check('owner can preview it, with a "students can\'t see it" note', (await o.locator('.banner', { hasText: "Students can't see the Release Guide yet" }).count()) === 1);
+  await o.screenshot({ path: `${out}/guide-owner.png` });
+  await o.click('.admin-bar button[data-act="guide-toggle"]'); await o.click('button[data-act="confirm-ok"]'); await o.waitForTimeout(900);
+  check('admin bar switch opens it', (await o.locator('.admin-bar button[data-act="guide-toggle"]').innerText()).includes('open'));
+  await s.reload(); await s.waitForTimeout(1200);
+  check('open: in the student menu', (await s.locator('.menu .mi', { hasText: 'Release Guide' }).count()) === 1);
+  await s.goto(`${B}/#/guide`); await s.waitForSelector('.guide');
+  await s.check('input[data-change="guide-done"]'); await s.waitForTimeout(700);
+  check('open: student can check off a step', (await s.locator('.guide-steps button.done').count()) >= 1);
+  const st = await (await r.get(`${B}/api/games/${g}/state`)).json();
+  check('lobby announces it', st.feed.some((f) => /Release Guide is OPEN/.test(f.message)));
+  await o.goto(`${B}/#/admin/season`); await o.waitForSelector('button[data-act="guide-toggle"]');
+  await o.locator('.card', { hasText: 'Release Guide' }).locator('button[data-act="guide-toggle"]').click(); await o.click('button[data-act="confirm-ok"]'); await o.waitForTimeout(900);
+  await s.goto(`${B}/#/hq`); await s.reload(); await s.waitForTimeout(1200);
+  check('closed again from Season settings: gone for students', !(await s.locator('.menu .mi', { hasText: 'Release Guide' }).count()));
+  check('no JS errors', errors.length === 0, errors.join(' | '));
+  console.log(`\n${pass} passed, ${failN} failed`);
+  await browser.close();
+})().catch((e) => { console.error(e); process.exit(1); });

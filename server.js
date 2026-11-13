@@ -238,6 +238,10 @@ app.put('/api/me/pin', auth, async (req, res) => {
 });
 
 app.put('/api/me/tutorial', auth, async (req, res) => {
+  if (req.user.role === 'player') {
+    const g = req.user.game_id ? await db.get('SELECT guide_open FROM games WHERE id = ?', req.user.game_id) : null;
+    if (!g?.guide_open) fail("The Release Guide isn't open yet. A Record Owner will open it.", 403);
+  }
   let t = {};
   try { t = JSON.parse(req.user.tutorial || '{}'); } catch {}
   t.done = t.done || {};
@@ -322,6 +326,18 @@ app.post('/api/games/:gameId/uploads', auth, ownerOnly, async (req, res) => {
   await G.post(game.id, 'phase', req.user.id, open
     ? 'Music sharing is OPEN! Head to the Showcase and share a link to the tracks you made this season.'
     : 'Music sharing is closed for now.');
+  res.json({ ok: true });
+});
+
+// The Release Guide stays hidden from students until a Record Owner opens it.
+app.post('/api/games/:gameId/guide', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  const open = !!req.body.open;
+  if (open === !!game.guide_open) return res.json({ ok: true });
+  await db.run('UPDATE games SET guide_open = ? WHERE id = ?', open ? 1 : 0, game.id);
+  await G.post(game.id, 'phase', req.user.id, open
+    ? 'The Release Guide is OPEN! Find it in the menu: a step-by-step path from your finished song to Spotify, Apple Music and every other streaming service.'
+    : 'The Release Guide is closed for now.');
   res.json({ ok: true });
 });
 
