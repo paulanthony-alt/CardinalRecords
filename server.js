@@ -943,7 +943,8 @@ app.post('/api/requests/:requestId/hire', auth, async (req, res) => {
 
 // ---------- label jobs (owners post paid work from the rate sheet) ----------
 // Volunteering in other classes and studio assistant work: owners post it, artists raise a
-// hand, owners pick up to `spots` artists and pay each one when the work is done.
+// hand, owners pick up to `spots` artists (or as many as they like when spots is null:
+// "as many as possible") and pay each one when the work is done.
 app.post('/api/games/:gameId/label-jobs', auth, ownerOnly, async (req, res) => {
   const game = await gameFor(req);
   if (!['active', 'showcase'].includes(game.status)) fail('Label jobs can be posted while the season is live or in the Showcase');
@@ -953,7 +954,8 @@ app.post('/api/games/:gameId/label-jobs', auth, ownerOnly, async (req, res) => {
   let amount = item.amount; let quantity = null;
   if (item.type === 'per') { quantity = int(b.quantity, `Number of ${item.per}s`, { min: 1, max: 20 }); amount = item.amount * quantity; }
   else if (item.type === 'min') amount = int(b.amount, `${item.name} pay`, { min: item.amount, max: 100_000 });
-  const spots = int(b.spots ?? 1, 'Artists needed', { min: 1, max: 10 });
+  // A set number of artists, or 'any' for as many as possible (no limit; stays open until closed).
+  const spots = b.spots === 'any' ? null : int(b.spots ?? 1, 'Artists needed', { min: 1, max: 30 });
   const whenText = str(b.whenText, 'When', { max: 100 });
   const details = str(b.details, 'Details', { max: 500 });
   const now = Date.now();
@@ -961,7 +963,7 @@ app.post('/api/games/:gameId/label-jobs', auth, ownerOnly, async (req, res) => {
     "INSERT INTO job_requests (game_id, user_id, kind, job_id, pricing, quantity, payout_id, amount, spots, when_text, details, created_at, updated_at) VALUES (?, ?, 'label', ?, 'label', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     game.id, req.user.id, item.id, quantity, item.id, amount, spots, whenText, details, now, now
   );
-  await G.post(game.id, 'request', req.user.id, `The label is looking for ${spots === 1 ? 'an artist' : `${spots} artists`}: ${item.name}${whenText ? ` (${whenText})` : ''}, paying ${G.fmt$(amount)}${spots > 1 ? ' each' : ''}. Raise your hand on the Job Board.`);
+  await G.post(game.id, 'request', req.user.id, `The label is looking for ${spots == null ? 'as many artists as possible' : spots === 1 ? 'an artist' : `${spots} artists`}: ${item.name}${whenText ? ` (${whenText})` : ''}, paying ${G.fmt$(amount)}${spots == null || spots > 1 ? ' each' : ''}. Raise your hand on the Job Board.`);
   res.json({ id });
 });
 
@@ -981,7 +983,7 @@ app.post('/api/requests/:requestId/pick', auth, ownerOnly, async (req, res) => {
     if (!a) fail("That artist didn't raise a hand for this");
     if (a.status !== 'applied') fail('Already picked');
     const picked = (await db.get("SELECT COUNT(*) AS n FROM job_applicants WHERE request_id = ? AND status <> 'applied'", q.id)).n;
-    if (picked >= q.spots) fail(`All ${q.spots} ${q.spots === 1 ? 'spot is' : 'spots are'} taken`);
+    if (q.spots != null && picked >= q.spots) fail(`All ${q.spots} ${q.spots === 1 ? 'spot is' : 'spots are'} taken`);
     await db.run("UPDATE job_applicants SET status = 'picked' WHERE request_id = ? AND user_id = ?", q.id, uid);
     await db.run(`UPDATE job_requests SET updated_at = ?, status = CASE WHEN ? >= spots THEN 'filled' ELSE status END WHERE id = ?`, Date.now(), picked + 1, q.id);
   });

@@ -73,6 +73,17 @@ const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS
   check('an old closed job stays listed while a picked artist is unpaid', (await S('o')).requests.some((x) => x.id === jid));
   check('pay after closing', (await call('o', 'POST', `/api/requests/${jid}/pay`, { userId: id.cal })).status === 200);
   check("label jobs don't count toward an artist's 3 open requests", (await call('ada', 'POST', `/api/games/${g}/requests`, { jobId: 'lyricist', quantity: 1 })).status === 200);
+  // "as many as possible": no limit on picks, stays open
+  const anyJob = (await post({ spots: 'any', whenText: 'All week' })).json.id;
+  st = await S('ada'); q = st.requests.find((x) => x.id === anyJob);
+  check('"as many as possible" job posted with no limit', q && q.spots === null && q.status === 'open');
+  check('lobby says as many artists as possible', st.feed.some((f) => /looking for as many artists as possible: Volunteer/.test(f.message)));
+  for (const k of ['ada', 'bo', 'cal']) await call(k, 'POST', `/api/requests/${anyJob}/apply`, {});
+  let okAll = true; for (const k of ['ada', 'bo', 'cal']) okAll = okAll && (await call('o', 'POST', `/api/requests/${anyJob}/pick`, { userId: id[k] })).status === 200;
+  q = (await S('o')).requests.find((x) => x.id === anyJob);
+  check('everyone can be picked, job stays open', okAll && q.picked.length === 3 && q.status === 'open');
+  check('bad number refused (0)', (await post({ spots: 0 })).status === 400);
+  check('set numbers still work up to 30', (await post({ spots: 30 })).status === 200 && (await post({ spots: 31 })).status === 400);
   const ex = (await call('o', 'GET', `/api/games/${g}/export.json`)).json;
   check('label jobs in the data download', ex.job_requests.some((x) => x.kind === 'label' && x.payout_id === 'volunteer' && x.spots === 2));
   await db.end();

@@ -71,7 +71,7 @@ Each artist can have up to 3 open requests. Others see how many hands are up, bu
 
 ### Label jobs (Record Owners post paid work)
 
-Owners can post **label jobs** on the Job Board with **Post a label job**, using any paid item from the rate sheet: **Volunteer in other GHS EMusic classes** (rate x class blocks) or **Studio Assistant** (an amount, at least the $15 minimum). Each job has how many artists are needed, when (free text, like "Tuesday, 3rd period") and details, and the lobby announces it. Label jobs are open while the season is live and during the Showcase.
+Owners can post **label jobs** on the Job Board with **Post a label job**, using any paid item from the rate sheet: **Volunteer in other GHS EMusic classes** (rate x class blocks) or **Studio Assistant** (an amount, at least the $15 minimum). Each job has how many artists are needed (a set number up to 30, or **as many as possible**, which has no limit and stays open until an owner closes it), when (free text, like "Tuesday, 3rd period") and details, and the lobby announces it. Label jobs are open while the season is live and during the Showcase.
 
 Artists raise a hand with an optional note. Owners **Pick** up to the number of spots (and can **Remove** a pick, which reopens the spot), then **Pay** each artist when the work is done. Payments are announced in the lobby, show in the ledger and can be undone. The admin bar shows **Label jobs to pay**. Students see the count of hands and who was picked, plus their own status (Picked, then Paid).
 

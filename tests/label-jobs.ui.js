@@ -52,6 +52,15 @@ const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS
   await s.reload(); await s.waitForTimeout(1200);
   check('student sees Paid and the money', (await s.locator('.label-job .chip', { hasText: 'Paid' }).count()) === 1);
   await s.screenshot({ path: `${out}/label-job-phone.png`, fullPage: true });
+  // second job: as many as possible
+  await o.click('button[data-act="label-job-new"]');
+  await o.selectOption('#label-job-form select[name="payoutId"]', 'volunteer');
+  await o.check('#label-job-form input[name="spotsMode"][value="any"]'); await o.waitForTimeout(200);
+  check('"As many as possible" disables the number', await o.locator('#label-job-form input[name="spots"]').isDisabled());
+  await o.fill('#label-job-form input[name="whenText"]', 'Any class block this week');
+  await o.click('#label-job-form button.primary'); await o.waitForTimeout(900);
+  check('card says as many artists as possible', (await o.locator('.label-job', { hasText: 'as many artists as possible' }).count()) === 1
+    && (await o.locator('.label-job', { hasText: 'as many artists as possible' }).locator('text=0 picked so far').count()) === 1);
   check('no JS errors', errors.length === 0, errors.join(' | '));
   console.log(`\n${pass} passed, ${failN} failed`);
   await browser.close();
