@@ -233,6 +233,15 @@ CREATE TABLE IF NOT EXISTS job_applicants (
   PRIMARY KEY (request_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_game ON job_requests(game_id, status);
+-- Label jobs: Record Owners post paid work from the rate sheet (volunteering, studio assistant).
+-- kind 'label' rows use payout_id/amount/spots/when_text; picked artists are paid when the work is done.
+ALTER TABLE job_requests ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'artist',
+  ADD COLUMN IF NOT EXISTS payout_id TEXT,
+  ADD COLUMN IF NOT EXISTS amount BIGINT,
+  ADD COLUMN IF NOT EXISTS spots INTEGER,
+  ADD COLUMN IF NOT EXISTS when_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE job_applicants ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'applied', -- applied | picked | paid
+  ADD COLUMN IF NOT EXISTS paid_entry INTEGER;
 
 -- Artist profile: a link to a Google Slides/Docs page showing what the artist is good at.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_url TEXT;

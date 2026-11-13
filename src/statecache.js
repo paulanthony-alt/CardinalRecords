@@ -85,7 +85,9 @@ async function refresh(game) {
     : [];
   // Job board: open requests plus the last few filled/closed ones, and who raised a hand.
   e.requests = await db.all(
-    "SELECT * FROM job_requests WHERE game_id = ? AND (status = 'open' OR updated_at > ?) ORDER BY created_at DESC LIMIT 100", gid, Date.now() - 14 * 86_400_000
+    `SELECT * FROM job_requests r WHERE game_id = ? AND (status = 'open' OR updated_at > ?
+       OR (kind = 'label' AND EXISTS (SELECT 1 FROM job_applicants a WHERE a.request_id = r.id AND a.status = 'picked')))
+     ORDER BY created_at DESC LIMIT 100`, gid, Date.now() - 14 * 86_400_000
   );
   e.applicants = e.requests.length
     ? await db.all(`SELECT * FROM job_applicants WHERE request_id IN (${e.requests.map(() => '?').join(',')}) ORDER BY created_at`, ...e.requests.map((r) => r.id))

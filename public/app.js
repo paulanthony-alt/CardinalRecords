@@ -441,7 +441,7 @@ function navItems() {
     ...(lobbyVisible() ? [{ to: 'lobby', label: 'Lobby', ic: 'message' }] : []),
     { to: 'rates', label: 'Rate Sheet', ic: 'dollar' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
-    { to: 'jobs', label: 'Job Board', ic: 'bag', count: myRequestsWithHands() },
+    { to: 'jobs', label: 'Job Board', ic: 'bag', count: isOwner() ? labelJobsToPay().length : myRequestsWithHands() },
     { to: 'challenges', label: 'Challenges', ic: 'award', count: challengesToEnter() },
     { to: 'studio', label: 'Studio', ic: 'clock', count: isOwner() ? studioPending().length : 0 },
     { to: 'roster', label: 'Roster', ic: 'users' },
@@ -517,6 +517,7 @@ function adminBar(route) {
     ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
     ${challengesToJudge().length ? item('#/challenges', 'To judge', challengesToJudge().length, true) : ''}
     ${studioPending().length ? item('#/studio', 'Studio requests', studioPending().length, true) : ''}
+    ${labelJobsToPay().length ? item('#/jobs', 'Label jobs to pay', labelJobsToPay().length, true) : ''}
     ${item('#/admin/lobby', 'Hidden posts', hidden)}
     ${item('#/admin/lobby', 'Muted', muted)}
     ${unclaimed ? item('#/admin/roster', 'Not signed in', unclaimed, true) : ''}
@@ -1483,10 +1484,71 @@ const requestWhat = (q) => {
   return `${esc(j.name)} · ${q.pricing === 'project' ? 'project rate' : `${plural(q.quantity, j.unit === 'item' ? 'item' : 'hour')}`}`;
 };
 
+/** Label jobs (posted by Record Owners) that still need something from an owner: picking or paying. */
+const labelJobsToPay = () => (S.state?.requests || []).filter((q) => q.kind === 'label' && (q.applicants || []).some((a) => a.status === 'picked'));
+const payoutName = (q) => S.state.rates.payouts.find((p) => p.id === q.payoutId)?.name || 'Label job';
+
+/** A job posted by the label: artists raise a hand; owners pick up to `spots` and pay each when the work is done. */
+function labelJobCard(q) {
+  const m = me();
+  const pickedCount = q.picked.length;
+  const full = pickedCount >= q.spots;
+  const chipMine = { picked: '<span class="chip s-active">You\'re picked!</span>', paid: '<span class="chip s-completed">Paid ✓</span>' }[q.myStatus] || '';
+  let actions = '';
+  if (q.status === 'open' && m && ['active', 'showcase'].includes(game().status)) {
+    if (!q.applied) actions = `<button class="btn sm primary" data-act="request-apply" data-id="${q.id}">${icon('check')}Raise my hand</button>`;
+    else if (q.myStatus === 'applied') actions = `<button class="btn sm" data-act="request-unapply" data-id="${q.id}">Lower my hand</button>`;
+  }
+  if (isOwner() && q.status !== 'closed') actions += ` <button class="btn sm ghost" data-act="request-close" data-id="${q.id}">Close job</button>`;
+  const hands = q.applicants
+    ? (q.applicants.length ? `<div class="hands"><b>${plural(q.applicants.length, 'hand')} raised</b>${q.applicants.map((a) => `<div class="hand">${nameLine(a.userId)}${a.note ? `<span class="dim">“${esc(a.note)}”</span>` : ''}
+        <span class="hand-acts">${a.status === 'paid' ? '<span class="chip s-completed">Paid</span>'
+          : a.status === 'picked' ? `<span class="chip s-active">Picked</span><button class="btn sm primary" data-act="label-pay" data-id="${q.id}" data-user="${a.userId}">${icon('dollar')}Pay ${money(q.amount)}</button><button class="btn sm ghost" data-act="label-unpick" data-id="${q.id}" data-user="${a.userId}">Remove</button>`
+          : !full && q.status === 'open' ? `<button class="btn sm" data-act="label-pick" data-id="${q.id}" data-user="${a.userId}">Pick</button>` : ''}</span></div>`).join('')}</div>`
+      : '<p class="dim" style="margin:6px 0 0">No hands raised yet.</p>')
+    : `<p class="dim" style="margin:6px 0 0">${plural(q.applicantCount, 'hand')} raised${q.applied ? ' (including yours)' : ''}${pickedCount ? ` · picked: ${q.picked.map((u) => esc(nameOf(u))).join(', ')}` : ''}</p>`;
+  const status = q.status === 'closed' ? '<span class="chip s-cancelled">Closed</span>' : full ? '<span class="chip s-completed">All spots filled</span>' : '<span class="chip s-active">Open</span>';
+  return `<div class="request label-job"><div class="rq-head"><span class="av label-av">${bird(18)}</span><div><b>The label</b> is looking for ${q.spots === 1 ? 'an artist' : `<b>${q.spots} artists</b>`}: <b>${esc(payoutName(q))}</b>
+      <div class="dim" style="font-size:12.5px">${q.whenText ? `${icon('clock')}${esc(q.whenText)} · ` : ''}${pickedCount} of ${q.spots} picked · ${ago(q.createdAt)} · ${status} ${chipMine}</div></div>
+    <div class="rq-amt mono">${money(q.amount)}${q.spots > 1 ? '<small> each</small>' : ''}</div></div>
+    ${q.details ? `<div class="terms">${esc(q.details)}</div>` : ''}${hands}${actions ? `<div class="c-actions">${actions}</div>` : ''}</div>`;
+}
+
+/** Owners: post paid work from the rate sheet (volunteering, studio assistant...). */
+function labelJobModal() {
+  const items = S.state.rates.payouts.filter((p) => p.type !== 'auto');
+  const first = items[0];
+  modal(`${modalHead('Post a label job', 'Paid work for the label. Artists raise a hand; you pick who does it and pay them when it\'s done.')}
+    <form data-form="label-job" id="label-job-form">
+      <label class="field"><span>Job</span><select name="payoutId" data-change="label-job-calc">${items.map((p) => `<option value="${esc(p.id)}" data-type="${p.type}" data-amount="${p.amount}" data-per="${esc(p.per || '')}">${esc(p.name)} · ${p.type === 'per' ? `${money(p.amount)} per ${esc(p.per)}` : p.type === 'min' ? `${money(p.amount)} minimum` : money(p.amount)}</option>`).join('')}</select></label>
+      <div class="row">
+        <label class="field" id="lj-qty" ${first?.type === 'per' ? '' : 'hidden'}><span id="lj-qty-label">Class blocks</span><input name="quantity" type="number" min="1" max="20" value="1" data-input-calc="1" /></label>
+        <label class="field" id="lj-amt" ${first?.type === 'min' ? '' : 'hidden'}><span>Pay ($, at least the minimum)</span><input name="amount" type="number" min="0" max="100000" step="1" value="${first?.amount || 0}" data-input-calc="1" /></label>
+        <label class="field"><span>Artists needed</span><input name="spots" type="number" min="1" max="10" value="1" /></label>
+      </div>
+      <label class="field"><span>When (optional)</span><input name="whenText" maxlength="100" placeholder="Tuesday, 3rd period · Intro to EMusic" /></label>
+      <label class="field"><span>Details (optional)</span><textarea name="details" maxlength="500" placeholder="Help set up mics and run the session for EMusic 1."></textarea></label>
+      <div class="callout">${icon('dollar')}<span>Each artist you pick is paid <b id="lj-total" class="mono">${money(first?.amount || 0)}</b> when you click Pay. Payments are announced in the lobby and can be undone.</span></div>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('send')}Post job</button></div></form>`, { wide: true });
+}
+function labelJobCalc(jobChanged = false) {
+  const f = $('#label-job-form'); if (!f) return;
+  const o = f.payoutId.selectedOptions[0];
+  const type = o.dataset.type; const amt = Number(o.dataset.amount);
+  $('#lj-qty').hidden = type !== 'per'; $('#lj-amt').hidden = type !== 'min';
+  if (type === 'per') $('#lj-qty-label').textContent = `${o.dataset.per[0].toUpperCase()}${o.dataset.per.slice(1)}s`;
+  // A new job type starts at its rate-sheet amount; after that the owner can raise it.
+  if (type === 'min' && (jobChanged || Number(f.amount.value) < amt)) f.amount.value = amt;
+  const total = type === 'per' ? amt * Math.max(1, Number(f.quantity.value) || 1) : type === 'min' ? Math.max(amt, Number(f.amount.value) || 0) : amt;
+  $('#lj-total').textContent = money(total);
+}
+
 function jobsView() {
   const st = S.state; const m = me();
-  const open = st.requests.filter((q) => q.status === 'open');
-  const past = st.requests.filter((q) => q.status !== 'open').slice(0, 10);
+  const artistReqs = st.requests.filter((q) => q.kind !== 'label');
+  const labelJobs = st.requests.filter((q) => q.kind === 'label' && (q.status !== 'closed' || (q.applicants || []).some((a) => a.status === 'picked')));
+  const open = artistReqs.filter((q) => q.status === 'open');
+  const past = artistReqs.filter((q) => q.status !== 'open').slice(0, 10);
   const canPost = m && live();
   const card = (q) => {
     const mine = q.userId === S.user.id;
@@ -1504,9 +1566,12 @@ function jobsView() {
       <div class="rq-amt mono">${q.amount != null ? money(q.amount) : ''}</div></div>
       ${q.details ? `<div class="terms">${esc(q.details)}</div>` : ''}${hands}${actions ? `<div class="c-actions">${actions}</div>` : ''}</div>`;
   };
-  return `${pageHead('The Label', 'Job Board', 'Need help with a track? Post what you need. Labelmates raise a hand, you pick one, and it becomes a rate-sheet deal for the Record Owners to approve.',
-    canPost ? `<button class="btn primary" data-act="request-new">${icon('plus')}Post a request</button>` : '')}
-    ${!live() ? '<div class="note">' + icon('lock') + 'The job board is open while the season is live.</div>' : ''}
+  return `${pageHead('The Label', 'Job Board', 'Need help with a track? Post what you need. Labelmates raise a hand, you pick one, and it becomes a rate-sheet deal for the Record Owners to approve. The label posts paid jobs here too.',
+    canPost ? `<button class="btn primary" data-act="request-new">${icon('plus')}Post a request</button>`
+      : isOwner() && ['active', 'showcase'].includes(st.game.status) ? `<button class="btn primary" data-act="label-job-new">${icon('plus')}Post a label job</button>` : '')}
+    ${labelJobs.length || isOwner() ? `<div class="card label-jobs"><div class="card-head"><h3>${bird(14)}From the label: paid jobs</h3><span class="more">${labelJobs.filter((q) => q.status === 'open').length} open</span></div>
+      ${labelJobs.length ? `<div class="requests">${labelJobs.map(labelJobCard).join('')}</div>` : `<p class="muted">${isOwner() ? 'Need help in another class or in the studio? <b>Post a label job</b> and pay the artists who do it.' : 'No label jobs right now.'}</p>`}</div>` : ''}
+    ${!live() ? '<div class="note">' + icon('lock') + 'Artist requests are open while the season is live.</div>' : ''}
     <div class="card"><div class="card-head"><h3>${icon('bag')}Open requests</h3><span class="more">${open.length}</span></div>
       ${open.length ? `<div class="requests">${open.map(card).join('')}</div>` : empty('bag', 'No open requests', canPost ? 'Post the first one: what do you need for your track?' : '')}</div>
     ${past.length ? `<div class="card"><div class="card-head"><h3>${icon('clock')}Recently filled or closed</h3></div><div class="requests">${past.map(card).join('')}</div></div>` : ''}`;
@@ -1887,6 +1952,14 @@ const ACTIONS = {
   'paste-roster': () => pasteRosterModal(),
   // 2. job board
   'request-new': () => hireModal({ request: true }),
+  'label-job-new': () => labelJobModal(),
+  'label-pick': (el) => act(() => api('POST', `/api/requests/${el.dataset.id}/pick`, { userId: Number(el.dataset.user) }), `${nameOf(Number(el.dataset.user))} picked`),
+  'label-unpick': (el) => act(() => api('POST', `/api/requests/${el.dataset.id}/unpick`, { userId: Number(el.dataset.user) }), 'Removed. The spot is open again.'),
+  'label-pay': (el) => {
+    const q = S.state.requests.find((x) => x.id === Number(el.dataset.id));
+    confirmModal(`Pay ${esc(nameOf(Number(el.dataset.user)))} ${money(q.amount)}?`, `For ${esc(payoutName(q))}${q.whenText ? ` (${esc(q.whenText)})` : ''}. It's announced in the lobby and can be undone in Treasury.`, `Pay ${money(q.amount)}`, 'primary',
+      () => act(() => api('POST', `/api/requests/${q.id}/pay`, { userId: Number(el.dataset.user) }), 'Paid'));
+  },
   'studio-decide': (el) => {
     const b = S.state.bookings.find((x) => x.id === Number(el.dataset.id));
     const a = el.dataset.a;
@@ -2179,6 +2252,13 @@ const FORMS = {
     const places = [d.w0, d.w1, d.w2].filter((v) => v);
     if (await act(() => api('POST', `/api/challenges/${d.id}/winners`, { places: places.map(Number) }), 'Winners announced and prizes paid!')) { closeModal(); confetti(); }
   },
+  'label-job': async (d) => {
+    const o = $('#label-job-form').payoutId.selectedOptions[0];
+    const body = { payoutId: d.payoutId, spots: Number(d.spots), whenText: d.whenText, details: d.details };
+    if (o.dataset.type === 'per') body.quantity = Number(d.quantity);
+    if (o.dataset.type === 'min') body.amount = Number(d.amount);
+    if (await act(() => api('POST', `/api/games/${S.gameId}/label-jobs`, body), 'Label job posted and announced')) { closeModal(); location.hash = '#/jobs'; }
+  },
   request: async (d) => {
     const body = { jobId: d.jobId, pricing: d.pricing, quantity: d.pricing === 'project' ? null : Number(d.quantity), dueDays: d.dueDays ? Number(d.dueDays) : null, details: d.details };
     if (await act(() => api('POST', `/api/games/${S.gameId}/requests`, body), 'Request posted. Labelmates can raise a hand now.')) { closeModal(); location.hash = '#/jobs'; }
@@ -2260,6 +2340,8 @@ document.addEventListener('change', async (e) => {
     S.gameId = Number(el.value);
     store.set('cr.game', S.gameId);
     await refresh();
+  } else if (k === 'label-job-calc') {
+    labelJobCalc(true);
   } else if (k === 'lobby-chat') {
     await act(() => api('PUT', `/api/games/${S.gameId}/lobby`, { chat: el.value }), `Lobby: ${CHAT_LABEL[el.value]}`);
   } else if (k === 'guide-done') {
@@ -2283,6 +2365,7 @@ document.addEventListener('toggle', (e) => {
 }, true);
 
 document.addEventListener('input', (e) => {
+  if (e.target.dataset.inputCalc && e.target.closest('#label-job-form')) return labelJobCalc();
   if (e.target.dataset.inputCalc) hireCalc();
 });
 
