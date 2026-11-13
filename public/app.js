@@ -278,13 +278,31 @@ function stepper(c, mini = false) {
     `<div class="st ${i < idx ? 'done' : ''} ${i === idx ? 'cur' : ''}"><span class="dot"></span>${s}</div>`).join('')}</div>`;
 }
 
+/** Deadline badge for a deal: due soon, overdue, or delivered on time / late. */
+function dueBadge(c, { long = false } = {}) {
+  if (!c.dueAt) return '';
+  const day = 86_400_000;
+  const when = new Date(c.dueAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (c.overdue) {
+    const d = Math.max(1, Math.floor((Date.now() - c.dueAt) / day));
+    return `<span class="due due-over" title="Was due ${when}">Overdue ${plural(d, 'day')}</span>`;
+  }
+  if (c.status === 'active') {
+    const left = Math.ceil((c.dueAt - Date.now()) / day);
+    return `<span class="due ${left <= 1 ? 'due-soon' : ''}" title="Due ${when}">${left <= 0 ? 'Due today' : left === 1 ? 'Due tomorrow' : `Due in ${left} days`}${long ? ` (${when})` : ''}</span>`;
+  }
+  if (c.deliveredAt && ['delivered', 'completed'].includes(c.status)) return c.late ? `<span class="due due-over" title="Was due ${when}">Delivered late</span>` : `<span class="due due-ok">On time</span>`;
+  return long ? `<span class="due" title="Due ${when}">Due ${when}</span>` : '';
+}
+const overdueDeals = () => (S.state?.contracts || []).filter((c) => c.overdue);
+
 function contractCard(c) {
   const acts = actionsFor(c);
   const needs = needsMe(c);
   return `<div class="it contract st-${c.status} ${needs ? 'sel' : ''}" data-act="nav" data-to="#/contract/${c.id}">
     <span class="chip s-${c.status}">${STATUS[c.status]}</span>
     <div class="it-main"><div><b>${esc(c.title)}</b> <span class="c-no mono">${cno(c.id)}</span>${needs ? ' <span class="needs-tag">Your move</span>' : ''}</div>
-      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.jobId ? ` · ${esc(pricingText(c))}` : ''}${c.dueDays ? ` · due in ${plural(c.dueDays, 'day')}` : ''}</div></div>
+      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))}${c.jobId ? ` · ${esc(pricingText(c))}` : ''}${!c.dueAt && c.dueDays ? ` · due ${plural(c.dueDays, 'day')} after approval` : ''} ${dueBadge(c)}</div></div>
     <div class="it-amt mono">${money(c.amount)}</div>
     ${acts.length ? `<div class="c-actions">${acts.slice(0, 3).map(([a, l, k]) => `<button class="btn sm ${k}" data-act="contract" data-id="${c.id}" data-a="${a}">${l}</button>`).join('')}</div>` : ''}
   </div>`;
@@ -422,6 +440,7 @@ function navItems() {
     ...(lobbyVisible() ? [{ to: 'lobby', label: 'Lobby', ic: 'message' }] : []),
     { to: 'rates', label: 'Rate Sheet', ic: 'dollar' },
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
+    { to: 'jobs', label: 'Job Board', ic: 'bag', count: myRequestsWithHands() },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
     { group: 'Season Finale' },
@@ -456,7 +475,7 @@ function taskAction() {
 const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
 const ADMIN_TABS = [
-  ['review', 'Review queue', 'shield'], ['lobby', 'Lobby controls', 'message'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
+  ['review', 'Review queue', 'shield'], ['class', 'Class mode', 'zap'], ['lobby', 'Lobby controls', 'message'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
   ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'],
   ['backups', 'Backups & offload', 'download'], ['new', 'New season', 'plus'],
 ];
@@ -491,10 +510,11 @@ function adminBar(route) {
     <label class="ab-ctl">Lobby <select data-change="lobby-chat" aria-label="Lobby chat setting">${Object.entries(CHAT_LABEL).map(([k, v]) => `<option value="${k}" ${L.chat === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     ${g.status !== 'archived' ? `<button class="ab-ctl ab-toggle ${uploadsOpen() ? 'on' : ''}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}" title="Music sharing">${icon('music')}Music ${uploadsOpen() ? 'open' : 'closed'}</button>` : ''}
     ${item('#/admin/review', 'Review', review, review > 0)}
+    ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
     ${item('#/admin/lobby', 'Hidden posts', hidden)}
     ${item('#/admin/lobby', 'Muted', muted)}
     ${unclaimed ? item('#/admin/roster', 'Not signed in', unclaimed, true) : ''}
-    <span class="ab-links">${item('#/admin/lobby', 'Lobby controls')}${item('#/admin/roster', 'Roster')}${item('#/admin/treasury', 'Treasury')}${item('#/admin/season', 'Season')}${item('#/admin/backups', 'Backups')}</span>
+    <span class="ab-links">${item('#/admin/class', 'Class mode')}${item('#/admin/lobby', 'Lobby controls')}${item('#/admin/roster', 'Roster')}${item('#/admin/treasury', 'Treasury')}${item('#/admin/season', 'Season')}${item('#/admin/backups', 'Backups')}</span>
   </div>`;
 }
 
@@ -821,7 +841,7 @@ function contractDetailView(id) {
         <div class="clause"><b>Compensation</b>
           <table class="money-table">${c.jobId ? `<tr><td>Rate sheet: ${esc(S.state.rates.jobs.find((j) => j.id === c.jobId)?.name || c.jobId)}</td><td>${esc(pricingText(c))}</td></tr>` : ''}<tr><td>Deal value</td><td>${money(c.amount)}</td></tr>${g.label_cut_pct ? `<tr><td>Label cut (${g.label_cut_pct}%)</td><td>-${money(fee)}</td></tr>` : ''}<tr><td>Paid to the Artist on completion</td><td>${money(c.amount - fee)}</td></tr></table>
           <small class="mono muted">Currently held in escrow: ${money(c.escrow)}</small></div>
-        ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'day')} of label approval.</p>` : ''}
+        ${c.dueDays ? `<p class="clause"><b>Delivery</b>Within ${plural(c.dueDays, 'day')} of label approval${c.dueAt ? `: due ${new Date(c.dueAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}` : ''}. ${dueBadge(c, { long: true })}${isOwner() && (c.overdue || c.late) && !c.events.some((e) => e.action === 'late_fee') ? ` <button class="btn sm danger" data-act="contract" data-id="${c.id}" data-a="late_fee">Charge the late fee</button>` : ''}</p>` : ''}
         ${c.rating ? `<p class="clause"><b>Client rating</b>${'★'.repeat(c.rating)}${'☆'.repeat(5 - c.rating)}</p>` : ''}
         <div class="sigs"><div class="sig">${signed.buyer}Client</div><div class="sig">${signed.seller}Artist</div><div class="sig">${signed.owner}Record Owner</div></div>
       </div>
@@ -860,7 +880,7 @@ function artistView(id) {
       <div class="kicker" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;color:var(--red);text-transform:uppercase">Level ${p.progress.level} · ${esc(p.progress.title)}</div>
       <h1>${esc(p.displayName)}</h1><div class="muted">${esc(p.roleTitle || 'Artist')} · @${esc(p.username)}${online(p) ? ' · <span class="green">Online</span>' : ''}</div>
       ${p.bio ? `<div class="bio">${esc(p.bio)}</div>` : ''}${badgesHtml(p.badges)}</div>
-      <div class="hero-actions">${p.profileUrl ? profileLink(p, 'btn') : ''}${canHire ? `<button class="btn primary" data-act="hire" data-seller="${p.id}">${icon('dollar')}Hire ${esc(p.displayName)}</button>` : ''}</div></div></div>
+      <div class="hero-actions">${p.profileUrl ? profileLink(p, 'btn') : ''}${isOwner() ? `<button class="btn" data-act="report" data-id="${p.id}">${icon('download')}Grading report</button>` : ''}${canHire ? `<button class="btn primary" data-act="hire" data-seller="${p.id}">${icon('dollar')}Hire ${esc(p.displayName)}</button>` : ''}</div></div></div>
     <div class="stats">
       ${stat('Chart', rank ? `#${rank}` : '—', '', 'red', 'chart')}
       ${stat('Net worth', money(p.stats.netWorth), '', 'gold', 'dollar')}
@@ -1050,8 +1070,8 @@ function dataView() {
     ${privacyLink('dim', 'margin-top:12px;font-size:12.5px')}
     <p class="dim" style="margin-top:12px;font-size:12.5px">${isOwner() ? 'Owner exports include player PINs. Store them securely. For a printable PDF of the class records, use <a href="#/admin/backups">Admin → Backups &amp; offload</a>.' : "Your download has the label's public records plus your own transactions and deals. Other artists' fees and private deal details aren't included."}</p>
     <div class="card" style="margin-top:16px"><div class="card-head"><h3>${icon('dollar')}${isOwner() ? 'Label ledger' : 'Your transactions'}</h3><span class="more">${ledger.length} ${ledger.length === 1 ? 'entry' : 'entries'}</span></div>
-      ${ledger.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>When</th>${isOwner() ? '<th>Account</th>' : ''}<th>Type</th><th>Memo</th><th class="r">Amount</th></tr></thead><tbody>
-        ${ledger.map((l) => `<tr><td class="nowrap dim">${dateStr(l.at)}</td>${isOwner() ? `<td>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</td>` : ''}<td><span class="tag">${KIND[l.kind] || esc(l.kind)}</span></td><td>${esc(l.memo)}${l.contractId ? ` <a href="#/contract/${l.contractId}" class="dim">${cno(l.contractId)}</a>` : ''}</td><td class="r num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</td></tr>`).join('')}
+      ${ledger.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>When</th>${isOwner() ? '<th>Account</th>' : ''}<th>Type</th><th>Memo</th><th class="r">Amount</th>${isOwner() ? '<th></th>' : ''}</tr></thead><tbody>
+        ${ledger.map((l) => `<tr><td class="nowrap dim">${dateStr(l.at)}</td>${isOwner() ? `<td>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</td>` : ''}<td><span class="tag">${KIND[l.kind] || esc(l.kind)}</span></td><td>${esc(l.memo)}${l.contractId ? ` <a href="#/contract/${l.contractId}" class="dim">${cno(l.contractId)}</a>` : ''}</td><td class="r num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'} ${l.undone ? 'struck' : ''}">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</td>${isOwner() ? `<td class="r">${undoCell(l)}</td>` : ''}</tr>`).join('')}
       </tbody></table></div>` : empty('dollar', 'No transactions yet')}</div>`;
 }
 
@@ -1111,6 +1131,8 @@ function adminView(tab) {
       <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
   } else if (t === 'backups') {
     body = backupsView();
+  } else if (t === 'class') {
+    body = classModeView();
   } else if (t === 'lobby') {
     body = lobbyControlsView();
   } else if (t === 'review') {
@@ -1131,16 +1153,18 @@ function adminView(tab) {
         <label class="field"><span>Artist name</span><input name="displayName" maxlength="40" placeholder="Lil Cardinal" ${full ? 'disabled' : ''} /></label>
         <label class="field"><span>Role</span><input name="roleTitle" maxlength="40" placeholder="Producer" ${full ? 'disabled' : ''} /></label>
       </div><button class="btn primary" ${full ? 'disabled' : ''}>${full ? 'Roster full' : 'Sign artist'}</button>
+      <button type="button" class="btn" data-act="paste-roster" ${full ? 'disabled' : ''}>${icon('users')}Paste a class list…</button>
       <span class="dim" style="font-size:12.5px;margin-left:10px">Give them their sign-up code (it shows in the roster below, or print slips). They use it once to pick their own PIN.${st.game.status === 'active' && st.game.starting_balance ? ` They'll get the ${money(st.game.starting_balance)} advance right away.` : ''}</span></form>`}</div>
       <div class="card"><div class="card-head"><h3>${icon('users')}Roster & PINs</h3>
-        ${r.some((p) => !p.claimed && p.active) ? `<button class="btn sm more" data-act="print-slips">${icon('file')}Print sign-up slips</button>` : ''}
+        <span class="more" style="display:inline-flex;gap:6px">${r.some((p) => !p.claimed && p.active) ? `<button class="btn sm" data-act="print-slips">${icon('file')}Print sign-up slips</button>` : ''}
+        ${r.length ? `<button class="btn sm" data-act="report">${icon('download')}Grading report (PDF)</button>` : ''}</span>
         <button class="btn sm ${r.some((p) => !p.claimed && p.active) ? '' : 'ghost more'}" data-act="reveal-all" style="margin-left:6px">${icon(S.ui.reveal.size ? 'eyeOff' : 'eye')}${S.ui.reveal.size ? 'Hide' : 'Show'} all PINs</button></div>
         ${r.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Artist</th><th>Username</th><th>PIN</th><th>Last seen</th><th class="r">Cash</th><th class="r">Actions</th></tr></thead><tbody>
         ${r.map((p) => `<tr class="${p.active ? '' : 'off'}"><td>${nameLine(p.id)}<div class="dim" style="font-size:12px;margin-left:32px">${esc(p.roleTitle)}</div></td>
           <td class="mono">@${esc(p.username)}</td>
           <td>${p.claimed ? `<span class="pin-cell">${S.ui.reveal.has(p.id) ? esc(p.pin) : '••••'}<button class="btn ghost icon sm" data-act="reveal" data-id="${p.id}" aria-label="Toggle PIN">${icon(S.ui.reveal.has(p.id) ? 'eyeOff' : 'eye')}</button></span>` : `<span class="tag" style="background:var(--brass)">Unclaimed</span>${p.claimCode ? ` <span class="code-chip mono" title="Sign-up code">${esc(fmtCode(p.claimCode))}</span>` : ''}`}</td>
           <td class="dim nowrap">${p.lastSeen ? ago(p.lastSeen) : 'Never'}</td><td class="r num ${p.stats.balance < 0 ? 'red' : 'gold'}">${money(p.stats.balance)}</td>
-          <td class="r nowrap"><button class="btn sm" data-act="edit-player" data-id="${p.id}">Edit</button> ${p.claimed ? `<button class="btn sm" data-act="reset-pin" data-id="${p.id}">Reset PIN</button>` : ''}
+          <td class="r nowrap"><button class="btn sm" data-act="report" data-id="${p.id}" title="Grading report PDF">Report</button> <button class="btn sm" data-act="edit-player" data-id="${p.id}">Edit</button> ${p.claimed ? `<button class="btn sm" data-act="reset-pin" data-id="${p.id}">Reset PIN</button>` : ''}
             <button class="btn sm ${p.active ? 'danger' : ''}" data-act="toggle-player" data-id="${p.id}">${p.active ? 'Remove' : 'Restore'}</button></td></tr>`).join('')}
         </tbody></table></div>` : empty('users', 'No artists yet', 'Sign your first artist above.')}</div>`;
   } else if (t === 'treasury') {
@@ -1166,7 +1190,8 @@ function adminView(tab) {
         </div>
       </div>`}
       <div class="card"><div class="card-head"><h3>Recent label transactions</h3><a class="more" href="#/data">Full ledger →</a></div>
-        ${st.ledger.filter((l) => ['grant', 'fine', 'bonus', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--rule)"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span></div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
+        <p class="dim" style="font-size:12.5px;margin:-4px 0 6px">Made a mistake? <b>Undo</b> adds the opposite entry, so the record shows both.</p>
+        ${st.ledger.filter((l) => ['grant', 'fine', 'bonus', 'advance', 'label_fee'].includes(l.kind)).slice(0, 15).map((l) => `<div class="tx-row"><span>${l.userId ? esc(nameOf(l.userId)) : '<b>Label vault</b>'}</span><span class="dim">${esc(l.memo)}</span><span class="num ${l.amount >= 0 ? 'amt-pos' : 'amt-neg'} ${l.undone ? 'struck' : ''}" style="margin-left:auto">${l.amount >= 0 ? '+' : ''}${money(l.amount)}</span>${undoCell(l)}</div>`).join('') || '<p class="muted">None yet.</p>'}</div>`;
   } else if (t === 'rates') {
     const r = st.rates;
     const num = (name, v) => `<input class="rate-in" name="${name}" type="number" min="0" max="1000000" step="1" value="${v ?? 0}" aria-label="${name}" />`;
@@ -1207,6 +1232,102 @@ function adminView(tab) {
   return `${pageHead('Record Owner · Admin', label, st && !NO_SEASON_TABS.includes(t) ? `Working on ${esc(st.game.name)}. Switch seasons with the picker at the top right or in All seasons.` : 'Every Record Owner can run every season.')}
     <div class="tabs">${ADMIN_TABS.filter(([k]) => st || NO_SEASON_TABS.includes(k)).map(([k, l]) => `<a class="tab-link ${t === k ? 'on' : ''}" href="#/admin/${k}">${l}${k === 'review' && st ? `<span class="count">${st.contracts.filter((c) => c.status === 'review').length}</span>` : ''}</a>`).join('')}</div>
     ${body}`;
+}
+
+/** "Maria Garcia, Vocalist" per line (or tab-separated from a spreadsheet) -> entries. */
+function parseClassList(text) {
+  return String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [name, role = ''] = line.split(/\t|,/).map((x) => x.trim());
+    return { displayName: name.slice(0, 40), roleTitle: role.slice(0, 40) };
+  }).filter((e) => e.displayName);
+}
+
+/** Owners: paste a class list, check the suggested usernames, sign everyone at once. */
+function pasteRosterModal(text = '', preview = null) {
+  const bad = preview ? preview.entries.filter((e) => e.problems.length).length : 0;
+  const over = preview && preview.entries.length > preview.room;
+  modal(`${modalHead('Paste a class list', 'One student per line. Add a role after a comma if you like: <span class="mono">Maria Garcia, Vocalist</span>. You can paste straight from a spreadsheet.')}
+    <form data-form="paste-preview"><label class="field"><span>Class list</span><textarea name="list" rows="7" placeholder="Maria Garcia, Vocalist&#10;Devon Reed, Producer&#10;Sam Lee">${esc(text)}</textarea></label>
+      <button class="btn">${icon('refresh')}${preview ? 'Check again' : 'Suggest usernames'}</button></form>
+    ${preview ? `<form data-form="paste-create" style="margin-top:12px">
+      <p class="muted" style="margin:0 0 6px">Usernames are first name + last initial + a number, so they aren't full names. Change any you like.</p>
+      <div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Role</th><th>Username</th><th></th></tr></thead><tbody>
+      ${preview.entries.map((e) => `<tr data-row data-name="${esc(e.displayName)}" data-role="${esc(e.roleTitle)}"><td>${esc(e.displayName)}</td><td class="dim">${esc(e.roleTitle)}</td>
+        <td><input value="${esc(e.username)}" maxlength="24" class="mono" style="max-width:170px" aria-label="Username for ${esc(e.displayName)}" /></td><td class="red" style="font-size:12px">${esc(e.problems.join('; '))}</td></tr>`).join('')}</tbody></table></div>
+      ${over ? `<p class="red">Only ${preview.room} ${preview.room === 1 ? 'spot is' : 'spots are'} left on this roster.</p>` : ''}${bad ? `<p class="red">Fix the ${plural(bad, 'highlighted name')} first (or use Check again).</p>` : ''}
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary" ${over ? 'disabled' : ''}>${icon('plus')}Sign ${plural(preview.entries.length, 'artist')}</button></div></form>` : ''}`, { wide: true });
+}
+
+/** Undo button (owners) for a label payment or fine, or its state. */
+function undoCell(l) {
+  if (!isOwner()) return '';
+  if (l.undone) return '<span class="tag hidden-tag">Undone</span>';
+  if (l.reverses) return '<span class="tag">Undo</span>';
+  if (!['grant', 'fine'].includes(l.kind) || !l.userId || game()?.status === 'archived') return '';
+  return `<button class="btn xs" data-act="undo" data-id="${l.id}">Undo</button>`;
+}
+
+/** Owners: one screen to run the start of class. One tap charges or pays from the rate sheet; today's taps can be undone. */
+function classModeView() {
+  const st = S.state; const r = activeRoster();
+  const fine = (id) => st.rates.fines.find((f) => f.id === id);
+  const pay = (id) => st.rates.payouts.find((p) => p.id === id);
+  const BTN = [
+    ['tardy', fine('tardy'), 'Tardy', 'danger'],
+    ['unexcused-absence', fine('unexcused-absence'), 'Absent', 'danger'],
+    ['volunteer', pay('volunteer'), 'Volunteer', 'pay'],
+    ['studio-assistant', pay('studio-assistant'), 'Studio asst.', 'pay'],
+  ].filter(([, it]) => it);
+  const today = new Date().toDateString();
+  const todays = (pid) => st.ledger.filter((l) => l.userId === pid && ['grant', 'fine'].includes(l.kind) && !l.reverses && new Date(l.at).toDateString() === today);
+  const archived = st.game.status === 'archived';
+  return `<div class="card"><div class="card-head"><h3>${icon('zap')}Class mode</h3><span class="more">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</span></div>
+    <p class="muted" style="margin-top:-4px">One tap per student, using the rate sheet amounts. Tapped the wrong one? Each of today's entries has an <b>Undo</b>. Payouts are announced in the lobby; fines aren't.</p>
+    ${archived ? '<p class="muted">This season is archived.</p>' : r.length ? `<div class="class-grid">${r.map((p) => {
+      const t = todays(p.id);
+      return `<div class="class-row"><div class="cr-who">${avatar(p)}<div><b>${esc(p.displayName)}</b><small class="${p.stats.balance < 0 ? 'red' : 'dim'}">${money(p.stats.balance)}</small></div></div>
+        <div class="cr-btns">${BTN.map(([id, it, label, cls]) => `<button class="btn sm ${cls}" data-act="class-tap" data-id="${p.id}" data-item="${id}" title="${esc(it.name)}">${label} <span class="mono">${it.type === 'percent' ? '' : `${cls === 'danger' ? '−' : '+'}${money(it.amount)}`}</span></button>`).join('')}</div>
+        <div class="cr-today">${t.map((l) => `<span class="today-chip ${l.undone ? 'undone' : ''}">${esc(l.memo.split(':')[0])} <b class="${l.amount < 0 ? 'amt-neg' : 'amt-pos'}">${l.amount < 0 ? '−' : '+'}${money(Math.abs(l.amount))}</b>${l.undone ? ' · undone' : ` <button class="link-x" data-act="undo" data-id="${l.id}" data-quick="1" aria-label="Undo">Undo</button>`}</span>`).join('')}</div></div>`;
+    }).join('')}</div>` : empty('users', 'No artists yet')}
+    <p class="dim" style="font-size:12.5px;margin-top:10px">Other fees, custom amounts and charging several students at once are in <a href="#/admin/treasury">Treasury &amp; fines</a>. Overdue deals: ${overdueDeals().length ? `<a href="#/admin/review">${plural(overdueDeals().length, 'deal')}</a>` : 'none'}.</p></div>`;
+}
+
+// ---------- job board ----------
+/** My open requests that have hands raised (shown as a count on the Job Board menu item). */
+const myRequestsWithHands = () => (S.state?.requests || []).filter((q) => q.userId === S.user?.id && q.status === 'open' && q.applicantCount).length;
+const requestWhat = (q) => {
+  const j = S.state.rates.jobs.find((x) => x.id === q.jobId);
+  if (!j) return esc(q.jobId);
+  return `${esc(j.name)} · ${q.pricing === 'project' ? 'project rate' : `${plural(q.quantity, j.unit === 'item' ? 'item' : 'hour')}`}`;
+};
+
+function jobsView() {
+  const st = S.state; const m = me();
+  const open = st.requests.filter((q) => q.status === 'open');
+  const past = st.requests.filter((q) => q.status !== 'open').slice(0, 10);
+  const canPost = m && live();
+  const card = (q) => {
+    const mine = q.userId === S.user.id;
+    const poster = person(q.userId);
+    let actions = '';
+    if (q.status === 'open') {
+      if (mine) actions = `<button class="btn sm ghost" data-act="request-close" data-id="${q.id}">Close request</button>`;
+      else if (m && live()) actions = q.applied ? `<button class="btn sm" data-act="request-unapply" data-id="${q.id}">Lower my hand</button>` : `<button class="btn sm primary" data-act="request-apply" data-id="${q.id}">${icon('check')}Raise my hand</button>`;
+      if (isOwner()) actions += ` <button class="btn sm ghost" data-act="request-close" data-id="${q.id}">Close</button>`;
+    }
+    const hands = q.applicants ? (q.applicants.length ? `<div class="hands"><b>${plural(q.applicants.length, 'hand')} raised</b>${q.applicants.map((a) => `<div class="hand">${nameLine(a.userId)}${a.note ? `<span class="dim">“${esc(a.note)}”</span>` : ''}${mine && q.status === 'open' ? `<button class="btn sm primary" data-act="request-hire" data-id="${q.id}" data-user="${a.userId}">Pick ${esc(nameOf(a.userId).split(' ')[0])}</button>` : ''}</div>`).join('')}</div>` : '<p class="dim" style="margin:6px 0 0">No hands raised yet.</p>')
+      : `<p class="dim" style="margin:6px 0 0">${plural(q.applicantCount, 'hand')} raised${q.applied ? ' (including yours)' : ''}</p>`;
+    const status = q.status === 'filled' ? `<span class="chip s-completed">Filled</span>${q.contractId ? ` <a href="#/contract/${q.contractId}">${cno(q.contractId)}</a>` : ''}` : q.status === 'closed' ? '<span class="chip s-cancelled">Closed</span>' : '<span class="chip s-active">Open</span>';
+    return `<div class="request ${mine ? 'mine' : ''}"><div class="rq-head">${avatar(poster)}<div><b>${esc(poster?.displayName || 'Artist')}</b> is looking for a <b>${requestWhat(q)}</b><div class="dim" style="font-size:12.5px">${ago(q.createdAt)}${q.dueDays ? ` · due ${plural(q.dueDays, 'day')} after approval` : ''} · ${status}</div></div>
+      <div class="rq-amt mono">${q.amount != null ? money(q.amount) : ''}</div></div>
+      ${q.details ? `<div class="terms">${esc(q.details)}</div>` : ''}${hands}${actions ? `<div class="c-actions">${actions}</div>` : ''}</div>`;
+  };
+  return `${pageHead('The Label', 'Job Board', 'Need help with a track? Post what you need. Labelmates raise a hand, you pick one, and it becomes a rate-sheet deal for the Record Owners to approve.',
+    canPost ? `<button class="btn primary" data-act="request-new">${icon('plus')}Post a request</button>` : '')}
+    ${!live() ? '<div class="note">' + icon('lock') + 'The job board is open while the season is live.</div>' : ''}
+    <div class="card"><div class="card-head"><h3>${icon('bag')}Open requests</h3><span class="more">${open.length}</span></div>
+      ${open.length ? `<div class="requests">${open.map(card).join('')}</div>` : empty('bag', 'No open requests', canPost ? 'Post the first one: what do you need for your track?' : '')}</div>
+    ${past.length ? `<div class="card"><div class="card-head"><h3>${icon('clock')}Recently filled or closed</h3></div><div class="requests">${past.map(card).join('')}</div></div>` : ''}`;
 }
 
 /** Owners only: how the lobby works for students, what they see, who can chat, and every post. */
@@ -1328,16 +1449,16 @@ const newSeasonForm = () => `<div class="card"><div class="card-head"><h3>${icon
   <p class="muted" style="margin-top:-6px">Each season is its own game with its own roster (up to 30 artists), money, rate sheet and Showcase. You can run as many seasons as you like, side by side.</p>${seasonForm(null, 'new-season')}</div>`;
 
 // ============================================================ modals
-function hireModal({ jobId, sellerId }) {
+function hireModal({ jobId, sellerId, request = false }) {
   const m = me();
   const sellers = activeRoster().filter((p) => p.id !== m.id);
   if (!sellers.length) { toast('There are no other artists to hire yet', 'err'); return; }
   const jobs = S.state.rates.jobs.filter((j) => j.active);
   const job = jobs.find((j) => j.id === jobId) || jobs[0];
-  modal(`${modalHead('Hire a labelmate', 'Prices come from the rate sheet. A teacher approves the deal before any work starts.')}
-    <form data-form="hire" id="hire-form">
+  modal(`${request ? modalHead('Post a job request', "Say what you need. Labelmates raise a hand; you pick one. Nothing is paid until you pick someone and the Record Owners approve.") : modalHead('Hire a labelmate', 'Prices come from the rate sheet. A teacher approves the deal before any work starts.')}
+    <form data-form="${request ? 'request' : 'hire'}" id="hire-form">
       <label class="field"><span>Job</span><select name="jobId" required data-change="hire-calc">${jobs.map((j) => `<option value="${esc(j.id)}" ${j.id === job.id ? 'selected' : ''}>${esc(j.name)} · ${money(j.unitRate)} ${unitLabel(j)}${j.projectRate ? ` · ${money(j.projectRate)} project` : ''}</option>`).join('')}</select></label>
-      <label class="field"><span>Artist</span><select name="sellerId" required>${sellers.map((p) => `<option value="${p.id}" ${p.id === sellerId ? 'selected' : ''}>${esc(p.displayName)}${p.roleTitle ? ` (${esc(p.roleTitle)})` : ''}</option>`).join('')}</select></label>
+      ${request ? '' : `<label class="field"><span>Artist</span><select name="sellerId" required>${sellers.map((p) => `<option value="${p.id}" ${p.id === sellerId ? 'selected' : ''}>${esc(p.displayName)}${p.roleTitle ? ` (${esc(p.roleTitle)})` : ''}</option>`).join('')}</select></label>`}
       <div class="field"><span>Pay by</span><div class="row pricing">
         <label class="check"><input type="radio" name="pricing" value="unit" checked data-change="hire-calc" /> <span id="hire-unit-label">The ${job.unit === 'item' ? 'item' : 'hour / class'}</span></label>
         <label class="check"><input type="radio" name="pricing" value="project" data-change="hire-calc" /> The project rate</label></div></div>
@@ -1345,10 +1466,10 @@ function hireModal({ jobId, sellerId }) {
         <label class="field" id="hire-qty"><span id="hire-qty-label">${job.unit === 'item' ? 'Items' : 'Hours / class blocks'}</span><input name="quantity" type="number" min="1" max="100" step="1" value="1" required data-input-calc="1" /></label>
         <label class="field"><span>Due in (days)</span><input name="dueDays" type="number" min="1" max="365" value="7" /></label>
       </div>
-      <label class="field"><span>What it's for (optional)</span><input name="title" maxlength="100" placeholder="${esc(job.name)} for my single" /></label>
-      <label class="field"><span>Details</span><textarea name="terms" maxlength="2000" placeholder="What exactly needs doing? Files to deliver, credit you'll give…"></textarea></label>
-      <div class="callout">${icon('lock')}<span>Total: <b id="hire-total" class="mono">${money(job.unitRate)}</b>. You have <b>${money(m.stats.balance)}</b>. The total is held in <b>escrow</b> right away and paid out when you confirm delivery. If the deal falls through, you get it all back.</span></div>
-      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('send')}Send offer</button></div>
+      ${request ? '' : `<label class="field"><span>What it's for (optional)</span><input name="title" maxlength="100" placeholder="${esc(job.name)} for my single" /></label>`}
+      <label class="field"><span>Details</span><textarea name="${request ? 'details' : 'terms'}" maxlength="${request ? 500 : 2000}" placeholder="What exactly needs doing? Files to deliver, credit you'll give…"></textarea></label>
+      <div class="callout">${icon('lock')}<span>Total: <b id="hire-total" class="mono">${money(job.unitRate)}</b>. You have <b>${money(m.stats.balance)}</b>. ${request ? "Nothing is held yet. When you pick someone, the total goes into <b>escrow</b> (so you'll need the cash then) and the deal goes to the Record Owners." : 'The total is held in <b>escrow</b> right away and paid out when you confirm delivery. If the deal falls through, you get it all back.'}</span></div>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('send')}${request ? 'Post request' : 'Send offer'}</button></div>
     </form>`);
 }
 
@@ -1471,6 +1592,7 @@ function viewFor() {
     case 'rates':
     case 'market': return ratesView();
     case 'contracts': return contractsView();
+    case 'jobs': return jobsView();
     case 'contract': return contractDetailView(id);
     case 'roster': return rosterView();
     case 'artist': return artistView(id);
@@ -1551,6 +1673,50 @@ const ACTIONS = {
         <label class="field"><span>Type the season's name to confirm</span><input name="confirm" required autocomplete="off" placeholder="${esc(x.name)}" /></label>
         <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn danger">${icon('trash')}Offload season</button></div></form>`);
   },
+  // 9. grading report: whole class, or one student
+  report: (el) => {
+    const tz = encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || '');
+    const a = document.createElement('a');
+    a.href = `/api/games/${S.gameId}/report.pdf?tz=${tz}${el.dataset.id ? `&player=${el.dataset.id}` : ''}`;
+    a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+    toast('Building the grading report. It will download in a moment.', 'ok', 'download');
+  },
+  // 12. undo a payment or fine
+  undo: (el) => {
+    const l = S.state.ledger.find((x) => x.id === Number(el.dataset.id));
+    if (!l) return;
+    const go = () => act(() => api('POST', `/api/ledger/${l.id}/reverse`), `Undone: ${l.amount < 0 ? 'fine' : 'payment'} of ${money(Math.abs(l.amount))} for ${nameOf(l.userId)}`);
+    if (el.dataset.quick) return go();
+    confirmModal('Undo this?', `${esc(nameOf(l.userId))}: ${esc(l.memo)} (${l.amount < 0 ? '−' : '+'}${money(Math.abs(l.amount))}). An opposite entry is added so the record shows both.`, 'Undo', 'primary', go);
+  },
+  // 10. class mode: one tap charges or pays from the rate sheet
+  'class-tap': (el) => {
+    const r = S.state.rates;
+    const it = r.fines.find((f) => f.id === el.dataset.item) || r.payouts.find((p) => p.id === el.dataset.item);
+    const body = { itemId: it.id, userIds: [Number(el.dataset.id)], quantity: 1 };
+    if (it.type === 'min') body.amount = it.amount;
+    el.disabled = true;
+    return act(() => api('POST', `/api/games/${S.gameId}/charges`, body), `${nameOf(Number(el.dataset.id))}: ${it.name}`);
+  },
+  // 13. paste a class list
+  'paste-roster': () => pasteRosterModal(),
+  // 2. job board
+  'request-new': () => hireModal({ request: true }),
+  'request-apply': (el) => modal(`${modalHead('Raise your hand', 'The artist who posted this sees your name and note, and picks who to work with.')}
+    <form data-form="request-apply"><input type="hidden" name="id" value="${el.dataset.id}" />
+      <label class="field"><span>Note (optional)</span><input name="note" maxlength="280" placeholder="I've done 3 hooks this season, free after school" /></label>
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('check')}Raise my hand</button></div></form>`),
+  'request-unapply': (el) => act(() => api('DELETE', `/api/requests/${el.dataset.id}/apply`), 'Hand lowered'),
+  'request-hire': (el) => {
+    const q = S.state.requests.find((x) => x.id === Number(el.dataset.id));
+    const who = nameOf(Number(el.dataset.user));
+    confirmModal(`Pick ${esc(who)}?`, `This becomes a deal: ${requestWhat(q)} for ${money(q.amount)}. The money goes into escrow now and the deal goes to the Record Owners for approval.`, `Pick ${esc(who.split(' ')[0])}`, 'primary', async () => {
+      const r = await act(() => api('POST', `/api/requests/${q.id}/hire`, { userId: Number(el.dataset.user) }), `Deal sent to the label for approval`);
+      if (r?.contractId) location.hash = `#/contract/${r.contractId}`;
+    });
+  },
+  'request-close': (el) => confirmModal('Close this request?', 'Nobody else can raise a hand. You can post a new one any time.', 'Close request', 'danger',
+    () => act(() => api('POST', `/api/requests/${el.dataset.id}/close`), 'Request closed')),
   mod: (el) => {
     const a = el.dataset.a; const id = el.dataset.id;
     const msgs = { hide: 'Hidden from students', show: 'Students can see it again', pin: 'Pinned to the top of the lobby', unpin: 'Unpinned' };
@@ -1766,6 +1932,34 @@ const FORMS = {
     return act(() => api('PUT', `/api/games/${S.gameId}/rates`, body), 'Rate sheet saved');
   },
   settings: (d) => act(() => api('PATCH', `/api/games/${S.gameId}`, d), 'Settings saved'),
+  request: async (d) => {
+    const body = { jobId: d.jobId, pricing: d.pricing, quantity: d.pricing === 'project' ? null : Number(d.quantity), dueDays: d.dueDays ? Number(d.dueDays) : null, details: d.details };
+    if (await act(() => api('POST', `/api/games/${S.gameId}/requests`, body), 'Request posted. Labelmates can raise a hand now.')) { closeModal(); location.hash = '#/jobs'; }
+  },
+  'request-apply': async (d) => {
+    if (await act(() => api('POST', `/api/requests/${d.id}/apply`, { note: d.note }), 'Hand raised')) closeModal();
+  },
+  'paste-preview': async (d) => {
+    const entries = parseClassList(d.list);
+    if (!entries.length) return toast('Paste at least one name', 'err');
+    try {
+      const r = await api('POST', `/api/games/${S.gameId}/players/bulk`, { entries, dryRun: true });
+      pasteRosterModal(d.list, r);
+    } catch (e) { toast(e.message, 'err'); }
+  },
+  'paste-create': async (d, f) => {
+    const rows = [...f.querySelectorAll('tr[data-row]')].map((tr) => ({
+      displayName: tr.dataset.name, roleTitle: tr.dataset.role, username: tr.querySelector('input').value.trim(),
+    }));
+    try {
+      const r = await api('POST', `/api/games/${S.gameId}/players/bulk`, { entries: rows });
+      await refresh();
+      modal(`${modalHead(`${plural(r.created.length, 'artist')} signed`, 'Each student signs in with their username and sign-up code, then picks their own PIN.')}
+        <div class="table-wrap"><table class="t"><thead><tr><th>Name</th><th>Username</th><th>Sign-up code</th></tr></thead><tbody>
+        ${r.created.map((c) => `<tr><td>${esc(c.displayName)}</td><td class="mono">${esc(c.username)}</td><td class="mono"><b>${esc(fmtCode(c.claimCode))}</b></td></tr>`).join('')}</tbody></table></div>
+        <div class="modal-foot"><button class="btn ghost" data-act="close-modal">Done</button><button class="btn primary" data-act="print-slips">${icon('file')}Print sign-up slips</button></div>`, { wide: true });
+    } catch (e) { toast(e.message, 'err'); }
+  },
   'lobby-show': (d, f) => {
     const show = {};
     for (const el of f.querySelectorAll('input[type=checkbox]')) show[el.name] = el.checked;

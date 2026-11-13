@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { db, tx, migrate } = require('./src/db');
 const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
-const { writeBackupPdf } = require('./src/backup');
+const { writeBackupPdf, writeReportPdf } = require('./src/backup');
 const SC = require('./src/statecache');
 const LB = require('./src/lobby');
 const compression = require('compression');
@@ -388,6 +388,10 @@ app.patch('/api/players/:userId', auth, ownerOnly, async (req, res) => {
     await db.run('UPDATE users SET username = ?, display_name = ?, role_title = ?, active = ?, game_id = ?, muted = ?, profile_url = ? WHERE id = ?', username, displayName, roleTitle, active, gameId, muted, profile || null, p.id);
     if (moving) {
       if (target.status === 'active') await G.payAdvance(target, p.id);
+      if (p.game_id) {
+        await db.run("UPDATE job_requests SET status = 'closed', updated_at = ? WHERE game_id = ? AND user_id = ? AND status = 'open'", Date.now(), p.game_id, p.id);
+        await db.run("DELETE FROM job_applicants WHERE user_id = ? AND request_id IN (SELECT id FROM job_requests WHERE game_id = ? AND status = 'open')", p.id, p.game_id);
+      }
       await G.post(gameId, 'join', p.id, `${displayName} joined ${target.name}${roleTitle ? ` as ${roleTitle}` : ''}.`);
     }
   });
@@ -517,6 +521,7 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
         terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
         rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
         events: party ? (e.events.get(c.id) || []).map((x) => ({ actorId: x.actor_id, action: x.action, note: x.note, amount: x.amount, at: x.created_at })) : [],
+        ...(({ dueAt, deliveredAt, overdue, late }) => ({ dueAt, deliveredAt, overdue, late }))(G.deadline(c, e.events.get(c.id) || [])),
       };
     });
 
@@ -535,6 +540,7 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
   }));
 
   const ledgerAll = [...e.ledger.values()].sort((a, b) => b.id - a.id);
+  const reversed = new Set(ledgerAll.filter((l) => l.reverses).map((l) => l.reverses));
   const ledgerRows = isOwner ? ledgerAll.slice(0, 500) : ledgerAll.filter((l) => l.user_id === me.id).slice(0, 300);
   const vault = ledgerAll.reduce((a, l) => (l.user_id == null ? a + l.amount : a), 0);
 
@@ -545,7 +551,22 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
     game: { ...gameOut, clock: G.clock(game) },
     rates: R.sheetFor(game),
     roster, owners: e.owners, former: e.former, contracts: contractsOut, feed, tracks, vault,
-    ledger: ledgerRows.map((l) => ({ id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at })),
+    ledger: ledgerRows.map((l) => ({
+      id: l.id, userId: l.user_id, amount: l.amount, kind: l.kind, contractId: l.contract_id, memo: l.memo, at: l.created_at,
+      reverses: l.reverses || null, undone: reversed.has(l.id), by: isOwner ? l.created_by : undefined,
+    })),
+    requests: (e.requests || []).map((q) => {
+      const apps = (e.applicants || []).filter((a) => a.request_id === q.id);
+      const mine = isOwner || q.user_id === me.id;
+      let amount = null;
+      try { amount = G.priceJob(game, { jobId: q.job_id, pricing: q.pricing, quantity: q.quantity }).amount; } catch {}
+      return {
+        id: q.id, userId: q.user_id, jobId: q.job_id, pricing: q.pricing, quantity: q.quantity, dueDays: q.due_days, details: q.details,
+        status: q.status, contractId: q.contract_id, createdAt: q.created_at, amount,
+        applicants: mine ? apps.map((a) => ({ userId: a.user_id, note: a.note, at: a.created_at })) : undefined,
+        applicantCount: apps.length, applied: apps.some((a) => a.user_id === me.id),
+      };
+    }),
     serverTime: Date.now(),
   });
 });
@@ -563,6 +584,141 @@ app.post('/api/games/:gameId/feed', auth, async (req, res) => {
     if (req.user.muted) fail('A Record Owner has paused your chat. You can still read the lobby.', 403);
   }
   await G.post(game.id, kind, req.user.id, message);
+  res.json({ ok: true });
+});
+
+// ---------- paste-in roster (owners) ----------
+/** A username from a name that isn't the full name: first name + last initial + 2 digits (mariag14). */
+function suggestUsername(name, taken) {
+  const parts = String(name).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z\s'-]/g, ' ').split(/[\s'-]+/).filter(Boolean);
+  const base = ((parts[0] || 'artist').slice(0, 14) + (parts.length > 1 ? parts[parts.length - 1][0] : '')).padEnd(3, 'x');
+  for (let i = 0; i < 500; i++) {
+    const u = `${base}${10 + Math.floor(Math.random() * 90)}`;
+    if (!taken.has(u)) { taken.add(u); return u; }
+  }
+  const u = `${base}${Date.now() % 100000}`; taken.add(u); return u;
+}
+
+// Paste a class list. dryRun: suggest usernames and show problems; otherwise sign everyone
+// (all or nothing) and return their sign-up codes for printing slips.
+app.post('/api/games/:gameId/players/bulk', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const raw = Array.isArray(req.body?.entries) ? req.body.entries : [];
+  if (!raw.length) fail('Paste at least one name');
+  if (raw.length > G.MAX_PLAYERS) fail(`That's more than ${G.MAX_PLAYERS} names`);
+  const taken = new Set((await db.all('SELECT LOWER(username) AS u FROM users')).map((r) => r.u));
+  const seen = new Set();
+  const entries = raw.map((r) => {
+    const displayName = str(r.displayName, 'Name', { max: 40 });
+    const roleTitle = str(r.roleTitle, 'Role', { max: 40 });
+    let username = str(r.username, 'Username', { max: 24 });
+    if (!username && displayName) username = suggestUsername(displayName, taken);
+    const problems = [];
+    if (!displayName) problems.push('Name is missing');
+    if (!G.isUsername(username)) problems.push('Usernames are 3-24 letters, numbers, dots, dashes or underscores');
+    else if (seen.has(username.toLowerCase())) problems.push('Used twice in this list');
+    else if (r.username && taken.has(username.toLowerCase())) problems.push('That username is taken');
+    seen.add(username.toLowerCase());
+    return { displayName, roleTitle, username, problems };
+  });
+  const count = (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'player' AND game_id = ? AND active = 1", game.id)).n;
+  const room = game.max_players - count;
+  if (req.body.dryRun) return res.json({ entries, room });
+  if (entries.some((e) => e.problems.length)) fail('Fix the highlighted names first');
+  if (entries.length > room) fail(`Only ${room} ${room === 1 ? 'spot is' : 'spots are'} left on this roster (${game.max_players} max)`);
+  const created = await tx(async () => {
+    const out = [];
+    for (const [i, e] of entries.entries()) {
+      if (await db.get('SELECT 1 FROM users WHERE username = ?', e.username)) fail(`${e.username} was just taken. Check again.`);
+      const code = G.newClaimCode();
+      const { id } = await db.run(
+        "INSERT INTO users (username, role, game_id, display_name, role_title, color, claim_code, created_at) VALUES (?, 'player', ?, ?, ?, ?, ?, ?) RETURNING id",
+        e.username, game.id, e.displayName, e.roleTitle, COLORS[(count + i) % COLORS.length], code, Date.now()
+      );
+      if (game.status === 'active') await G.payAdvance(game, id);
+      out.push({ id, username: e.username, displayName: e.displayName, claimCode: code });
+    }
+    await G.post(game.id, 'join', req.user.id, `${out.length} new ${out.length === 1 ? 'artist' : 'artists'} signed to the label: ${out.map((o) => o.displayName).join(', ')}.`.slice(0, 1000));
+    return out;
+  });
+  res.json({ ok: true, created });
+});
+
+// ---------- undo a payment or fine (owners) ----------
+app.post('/api/ledger/:entryId/reverse', auth, ownerOnly, async (req, res) => {
+  const r = await G.reverseEntry(int(req.params.entryId, 'Transaction'), req.user);
+  res.json({ ok: true, id: r.id });
+});
+
+// ---------- job board ----------
+async function requestFor(req) {
+  const q = await db.get('SELECT * FROM job_requests WHERE id = ?', int(req.params.requestId, 'Request'));
+  if (!q) fail('That request is gone', 404);
+  if (req.user.role !== 'owner' && req.user.game_id !== q.game_id) fail('Not your label', 403);
+  return { q, game: await G.getGame(q.game_id) };
+}
+const MAX_OPEN_REQUESTS = 3;
+
+app.post('/api/games/:gameId/requests', auth, async (req, res) => {
+  const game = await gameFor(req);
+  if (req.user.role !== 'player') fail('Only artists post on the job board', 403);
+  if (game.status !== 'active') fail('The job board is open while the season is live');
+  const b = req.body || {};
+  const price = G.priceJob(game, b); // validates the job, pricing and quantity
+  const dueDays = b.dueDays ? int(b.dueDays, 'Due in (days)', { min: 1, max: G.MAX_DAYS }) : null;
+  const details = str(b.details, 'Details', { max: 500 });
+  const open = (await db.get("SELECT COUNT(*) AS n FROM job_requests WHERE game_id = ? AND user_id = ? AND status = 'open'", game.id, req.user.id)).n;
+  if (open >= MAX_OPEN_REQUESTS) fail(`You can have up to ${MAX_OPEN_REQUESTS} open requests. Close one first.`);
+  const now = Date.now();
+  const { id } = await db.run(
+    'INSERT INTO job_requests (game_id, user_id, job_id, pricing, quantity, due_days, details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    game.id, req.user.id, price.job.id, price.pricing, price.quantity, dueDays, details, now, now
+  );
+  const what = price.pricing === 'project' ? 'project rate' : `${price.quantity} ${price.job.unit === 'item' ? 'item' : 'hour'}${price.quantity === 1 ? '' : 's'}`;
+  await G.post(game.id, 'request', req.user.id, `${req.user.display_name} is looking for a ${price.job.name} (${what}, ${G.fmt$(price.amount)}). Check the Job Board.`);
+  res.json({ id });
+});
+
+app.post('/api/requests/:requestId/apply', auth, async (req, res) => {
+  const { q, game } = await requestFor(req);
+  if (req.user.role !== 'player') fail('Only artists can raise a hand', 403);
+  if (q.user_id === req.user.id) fail("You can't apply to your own request");
+  if (q.status !== 'open' || game.status !== 'active') fail('This request is closed');
+  const note = str(req.body?.note, 'Note', { max: 280 });
+  await db.run('INSERT INTO job_applicants (request_id, user_id, note, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (request_id, user_id) DO UPDATE SET note = EXCLUDED.note', q.id, req.user.id, note, Date.now());
+  await db.run('UPDATE job_requests SET updated_at = ? WHERE id = ?', Date.now(), q.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/requests/:requestId/apply', auth, async (req, res) => {
+  const { q } = await requestFor(req);
+  await db.run('DELETE FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// The poster picks someone who raised a hand: it becomes a rate-sheet deal they've
+// both agreed to, so it goes straight to the Record Owners for approval.
+app.post('/api/requests/:requestId/hire', auth, async (req, res) => {
+  const { q, game } = await requestFor(req);
+  if (q.user_id !== req.user.id) fail('Only the artist who posted this can pick someone', 403);
+  if (q.status !== 'open') fail('This request is closed');
+  const pick = int(req.body?.userId, 'Artist');
+  if (!(await db.get('SELECT 1 FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, pick))) fail("That artist didn't raise a hand for this");
+  const contractId = await tx(async () => {
+    const cid = await G.createContract(game, req.user, {
+      sellerId: pick, jobId: q.job_id, pricing: q.pricing, quantity: q.quantity, dueDays: q.due_days, terms: q.details,
+    }, { acceptedBy: pick });
+    await db.run("UPDATE job_requests SET status = 'filled', contract_id = ?, updated_at = ? WHERE id = ?", cid, Date.now(), q.id);
+    return cid;
+  });
+  res.json({ ok: true, contractId });
+});
+
+app.post('/api/requests/:requestId/close', auth, async (req, res) => {
+  const { q } = await requestFor(req);
+  if (q.user_id !== req.user.id && req.user.role !== 'owner') fail('Only the artist who posted this or a Record Owner can close it', 403);
+  if (q.status === 'open') await db.run("UPDATE job_requests SET status = 'closed', updated_at = ? WHERE id = ?", Date.now(), q.id);
   res.json({ ok: true });
 });
 
@@ -727,6 +883,7 @@ async function exportData(game, viewer) {
       ? await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)
       : (await db.all('SELECT * FROM feed WHERE game_id = ? ORDER BY id', game.id)).filter((f) => LB.studentCanSee(f, LB.lobbyOf(game))).map(({ hidden, ...f }) => f),
     tracks: await db.all('SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY id', game.id),
+    job_requests: await db.all('SELECT id, user_id, job_id, pricing, quantity, due_days, details, status, contract_id, created_at FROM job_requests WHERE game_id = ? ORDER BY id', game.id),
   };
 }
 
@@ -776,6 +933,21 @@ app.get('/api/games/:gameId/backup.pdf', auth, ownerOnly, async (req, res) => {
   await sendBackupPdf(req, res, [game], `cardinal-records-${slug(game.name)}`);
 });
 
+// Grading report: the whole class, or one student with ?player=ID.
+app.get('/api/games/:gameId/report.pdf', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  let playerId = null; let who = 'class';
+  if (req.query.player) {
+    playerId = int(req.query.player, 'Artist');
+    const p = await db.get("SELECT username FROM users WHERE id = ? AND role = 'player' AND game_id = ?", playerId, game.id);
+    if (!p) fail('That artist is not on this roster', 404);
+    who = p.username;
+  }
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', `attachment; filename="grading-report-${slug(game.name)}-${slug(who)}-${new Date().toISOString().slice(0, 10)}.pdf"`);
+  await writeReportPdf(res, game, { playerId, by: req.user.display_name, tz: String(req.query.tz || '') });
+});
+
 app.get('/api/backup.pdf', auth, ownerOnly, async (req, res) => {
   const games = [];
   for (const { id } of await db.all("SELECT id FROM games WHERE status != 'offloaded' ORDER BY created_at")) games.push(await G.getGame(id));
@@ -794,6 +966,7 @@ async function purgeSeason(gameId) {
   await db.run('DELETE FROM feed WHERE game_id = ?', gameId);
   await db.run('DELETE FROM tracks WHERE game_id = ?', gameId);
   await db.run('DELETE FROM services WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM job_requests WHERE game_id = ?', gameId); // applicants go with them
   const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
     AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
     AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)

@@ -19,7 +19,7 @@ const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS
   const msgs = async (who) => (await S(who)).feed.filter((f) => f.kind === 'chat').map((f) => f.message);
 
   st = await S('ana');
-  check('defaults: chat open, everything shown', st.lobby.chat === 'open' && Object.values(st.lobby.show).every(Boolean) && st.lobby.categories.length === 10);
+  check('defaults: chat open, everything shown', st.lobby.chat === 'open' && Object.values(st.lobby.show).every(Boolean) && st.lobby.categories.length === 11 && st.lobby.categories.some((c) => c.id === 'request'));
   check('student can chat', (await call('ana', 'POST', `/api/games/${g}/feed`, { message: 'hello from ana' })).status === 200);
   await call('bob', 'POST', `/api/games/${g}/feed`, { message: 'rude message from bo' });
   await call('cyd', 'POST', `/api/games/${g}/feed`, { message: 'cy says hi' });

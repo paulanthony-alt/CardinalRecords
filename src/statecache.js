@@ -76,6 +76,13 @@ async function refresh(game) {
     'SELECT t.*, (SELECT COUNT(*) FROM track_likes l WHERE l.track_id = t.id) AS likes FROM tracks t WHERE game_id = ? ORDER BY created_at DESC', gid
   );
   e.likes = await db.all('SELECT l.track_id, l.user_id FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ?', gid);
+  // Job board: open requests plus the last few filled/closed ones, and who raised a hand.
+  e.requests = await db.all(
+    "SELECT * FROM job_requests WHERE game_id = ? AND (status = 'open' OR updated_at > ?) ORDER BY created_at DESC LIMIT 100", gid, Date.now() - 14 * 86_400_000
+  );
+  e.applicants = e.requests.length
+    ? await db.all(`SELECT * FROM job_applicants WHERE request_id IN (${e.requests.map(() => '?').join(',')}) ORDER BY created_at`, ...e.requests.map((r) => r.id))
+    : [];
   e.owners = (await db.all("SELECT id, display_name, color FROM users WHERE role = 'owner'"))
     .map((o) => ({ id: o.id, displayName: o.display_name, color: o.color }));
   e.former = (await db.all(

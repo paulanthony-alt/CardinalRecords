@@ -155,6 +155,36 @@ ALTER TABLE contracts ADD COLUMN IF NOT EXISTS job_id TEXT,
 
 -- Backups and end-of-season offload. status can also be 'offloaded': the season's
 -- records were deleted after a backup, leaving this row and a small JSON summary.
+-- Undo: a reversal is a new ledger row pointing at the entry it cancels (the ledger stays append-only).
+ALTER TABLE ledger ADD COLUMN IF NOT EXISTS reverses INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_reverses ON ledger(reverses) WHERE reverses IS NOT NULL;
+
+-- Job board: an artist posts what they need; labelmates raise a hand; the poster picks one
+-- and it becomes a normal rate-sheet deal. user ids aren't foreign keys so offloading a
+-- season can delete its artists; rows go when their season or request does.
+CREATE TABLE IF NOT EXISTS job_requests (
+  id          SERIAL  PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
+  job_id      TEXT    NOT NULL,
+  pricing     TEXT    NOT NULL,
+  quantity    INTEGER,
+  due_days    INTEGER,
+  details     TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'open',   -- open | filled | closed
+  contract_id INTEGER,
+  created_at  BIGINT  NOT NULL,
+  updated_at  BIGINT  NOT NULL
+);
+CREATE TABLE IF NOT EXISTS job_applicants (
+  request_id INTEGER NOT NULL REFERENCES job_requests(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL,
+  note       TEXT    NOT NULL DEFAULT '',
+  created_at BIGINT  NOT NULL,
+  PRIMARY KEY (request_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_requests_game ON job_requests(game_id, status);
+
 -- Artist profile: a link to a Google Slides/Docs page showing what the artist is good at.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_url TEXT;
 
