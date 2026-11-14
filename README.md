@@ -59,6 +59,8 @@ While it's hidden, students don't see it in the menu, on their home page or in t
 
 Owners **approve** or **decline** each request, with an optional note the student sees. A request that overlaps an approved session is flagged. Approved sessions go on the **studio schedule** that everyone sees; other students see who and when, but not the details. Owners can cancel an approved session.
 
+The Studio page has a **week calendar** (Monday to Friday, plus Saturday or Sunday when something is booked on them). Approved sessions show as green blocks, and requests still waiting as dashed yellow ones (owners see every waiting request, students their own). Overlapping sessions sit side by side. **Previous / This week / Next** move between weeks. Tapping a session opens its details with the usual buttons; students can tap an open time to fill in the request form with that day and time.
+
 After a session's start time, owners can mark a **No-show**, which charges the rate sheet's studio no-show fee and can be undone.
 
 Students can cancel their own requests before the session starts, and can have up to 5 waiting at once. Sessions appear on the grading report as booked and no-shows. Owners' data download has every request; students' has only their own. Offloading a season deletes its requests.
