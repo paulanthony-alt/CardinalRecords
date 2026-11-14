@@ -74,7 +74,7 @@ const S = {
   state: null,
   stateKey: '',
   login: freshLogin(),
-  ui: { contractTab: 'action', reveal: new Set(), guideStep: null, chartTab: 'worth', adminOpen: false },
+  ui: { contractTab: 'action', reveal: new Set(), guideStep: null, chartTab: 'worth', adminOpen: false, studioWeek: 0 },
 };
 function freshLogin() { return { step: 'user', username: '', info: null, pin: '', firstPin: '', code: '', error: '' }; }
 /** Sign-up codes are stored as ABCDEF and shown as ABC-DEF. */
@@ -1337,6 +1337,68 @@ function bookingRow(b, { owner = false } = {}) {
     <div class="bk-side"><span class="chip ${cls}">${label}</span>${acts.length ? `<div class="c-actions">${acts.join('')}</div>` : ''}</div></div>`;
 }
 
+/** Monday 00:00 (local time) of the week `offset` weeks from this one. */
+function weekStart(offset = 0) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + offset * 7);
+  return d;
+}
+const CAL_HOUR_PX = 44;
+const CAL_MIN_WEEK = -4; const CAL_MAX_WEEK = 17;
+
+/**
+ * Week calendar of the studio: approved sessions for everyone, plus requests still waiting
+ * (owners see all of them, students their own). Students tap an open time to start a request;
+ * tapping a session shows its details.
+ */
+function studioCalendar({ canAsk = false } = {}) {
+  const off = Math.max(CAL_MIN_WEEK, Math.min(CAL_MAX_WEEK, S.ui.studioWeek || 0));
+  const start = weekStart(off);
+  const dayMs = 86_400_000;
+  const shown = (S.state.bookings || []).filter((b) => ['approved', 'pending'].includes(b.status));
+  const inDay = (d) => { const a = new Date(start); a.setDate(a.getDate() + d); const z = new Date(a); z.setDate(z.getDate() + 1); return shown.filter((b) => b.startsAt >= a.getTime() && b.startsAt < z.getTime()); };
+  // Weekdays always; Saturday and Sunday only when something is booked on them.
+  const days = [0, 1, 2, 3, 4, 5, 6].filter((d) => d < 5 || inDay(d).length);
+  const week = days.flatMap(inDay);
+  const hourOf = (ms) => { const d = new Date(ms); return d.getHours() + d.getMinutes() / 60; };
+  const h0 = Math.min(7, ...week.map((b) => Math.floor(hourOf(b.startsAt))));
+  const h1 = Math.max(17, ...week.map((b) => Math.min(24, Math.ceil(hourOf(b.startsAt) + b.minutes / 60))));
+  const hours = Array.from({ length: h1 - h0 }, (_, i) => h0 + i);
+  const hourLabel = (h) => new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
+  const now = Date.now(); const today = new Date(); today.setHours(0, 0, 0, 0);
+  const end = new Date(start); end.setDate(end.getDate() + (days.includes(6) ? 6 : days.includes(5) ? 5 : 4));
+  const range = `${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  const col = (d) => {
+    const date = new Date(start); date.setDate(date.getDate() + d);
+    const isToday = date.getTime() === today.getTime();
+    const list = inDay(d).sort((a, b) => a.startsAt - b.startsAt);
+    // Sessions that overlap share the column side by side.
+    const lanes = [];
+    const placed = list.map((b) => { let lane = lanes.findIndex((endAt) => endAt <= b.startsAt); if (lane === -1) lane = lanes.length; lanes[lane] = b.startsAt + b.minutes * 60_000; return { b, lane }; });
+    const n = Math.max(1, lanes.length);
+    const blocks = placed.map(({ b, lane }) => {
+      const top = (hourOf(b.startsAt) - h0) * CAL_HOUR_PX;
+      const height = Math.max(20, (b.minutes / 60) * CAL_HOUR_PX - 2);
+      const mine = b.userId === S.user.id;
+      return `<button type="button" class="cal-block st-${b.status} ${mine ? 'mine' : ''}" data-act="cal-open" data-id="${b.id}" style="top:${top}px;height:${height}px;left:calc(${(lane / n) * 100}% + 2px);width:calc(${100 / n}% - 4px)"
+        title="${esc(nameOf(b.userId))} · ${sessionText(b)}"><b>${esc(nameOf(b.userId))}</b><small>${timeText(b.startsAt)}–${timeText(b.startsAt + b.minutes * 60_000)}${b.status === 'pending' ? ' · waiting' : ''}</small></button>`;
+    }).join('');
+    const nowLine = isToday && hourOf(now) >= h0 && hourOf(now) < h1 ? `<div class="cal-now" style="top:${(hourOf(now) - h0) * CAL_HOUR_PX}px"></div>` : '';
+    return `<div class="cal-col ${isToday ? 'today' : ''} ${canAsk ? 'askable' : ''}" ${canAsk ? `data-act="cal-slot" data-day="${date.getTime()}" data-h0="${h0}"` : ''} style="height:${hours.length * CAL_HOUR_PX}px">${blocks}${nowLine}</div>`;
+  };
+  return `<div class="card studio-cal"><div class="card-head"><h3>${icon('clock')}Studio calendar</h3><span class="more">${range}</span></div>
+    <div class="cal-bar"><button class="btn sm" data-act="cal-week" data-d="-1" ${off <= CAL_MIN_WEEK ? 'disabled' : ''} aria-label="Previous week">‹ Previous</button>
+      <button class="btn sm" data-act="cal-week" data-d="0" ${off === 0 ? 'disabled' : ''}>This week</button>
+      <button class="btn sm" data-act="cal-week" data-d="1" ${off >= CAL_MAX_WEEK ? 'disabled' : ''} aria-label="Next week">Next ›</button>
+      <span class="cal-legend"><i class="lg approved"></i>Booked<i class="lg pending"></i>Waiting for a teacher${canAsk ? '<span class="dim"> · Tap an open time to request it</span>' : ''}</span></div>
+    <div class="cal-scroll"><div class="cal-grid" style="grid-template-columns:52px repeat(${days.length}, minmax(96px, 1fr))">
+      <div class="cal-corner"></div>${days.map((d) => { const date = new Date(start); date.setDate(date.getDate() + d); return `<div class="cal-day ${date.getTime() === today.getTime() ? 'today' : ''}">${date.toLocaleDateString(undefined, { weekday: 'short' })} <b>${date.getDate()}</b></div>`; }).join('')}
+      <div class="cal-hours" style="height:${hours.length * CAL_HOUR_PX}px">${hours.map((h) => `<div style="height:${CAL_HOUR_PX}px">${hourLabel(h)}</div>`).join('')}</div>
+      ${days.map(col).join('')}
+    </div></div>
+    ${week.length ? '' : '<p class="dim" style="margin:8px 0 0;font-size:12.5px">Nothing booked this week.</p>'}</div>`;
+}
+
 function studioView() {
   const st = S.state; const m = me(); const all = st.bookings || [];
   const now = Date.now();
@@ -1353,6 +1415,7 @@ function studioView() {
     return `${pageHead('The Label', 'Studio', 'Students ask for studio time here. Approve or decline each request; approved sessions go on the schedule everyone sees.')}
       <div class="card"><div class="card-head"><h3>${icon('shield')}Requests to review</h3><span class="more">${pending.length}</span></div>
         ${pending.length ? `<div class="bookings">${pending.map((b) => bookingRow(b, { owner: true })).join('')}</div>` : '<p class="muted">No requests waiting.</p>'}</div>
+      ${studioCalendar()}
       ${scheduleCard}
       ${toCheck.length ? `<div class="card"><div class="card-head"><h3>${icon('flag')}Did they show up?</h3></div><p class="muted" style="margin-top:-4px">Sessions from the last week. <b>No-show</b> charges the rate sheet's studio no-show fee (you can undo it).</p>
         <div class="bookings">${toCheck.map((b) => bookingRow(b, { owner: true })).join('')}</div></div>` : ''}
@@ -1360,7 +1423,8 @@ function studioView() {
   }
   const mine = all.filter((b) => b.userId === S.user.id).sort((a, b) => b.startsAt - a.startsAt);
   return `${pageHead('The Label', 'Studio', 'Ask for time in the recording studio. A teacher approves or declines each request.')}
-    ${canAsk ? `<form class="card" data-form="studio-request"><div class="card-head"><h3>${icon('plus')}Request studio time</h3></div>
+    ${studioCalendar({ canAsk })}
+    ${canAsk ? `<form class="card" data-form="studio-request" id="studio-form"><div class="card-head"><h3>${icon('plus')}Request studio time</h3></div>
       <div class="row">
         <label class="field"><span>Day</span><input name="day" type="date" required min="${ymdLocal(new Date())}" value="${ymdLocal(tomorrow)}" /></label>
         <label class="field"><span>Start time</span><input name="time" type="time" required value="09:00" step="900" /></label>
@@ -1368,7 +1432,7 @@ function studioView() {
       </div>
       <label class="field"><span>What are you recording?</span><input name="purpose" required minlength="3" maxlength="300" placeholder="Lead vocals for my single" /></label>
       <label class="field"><span>Who's coming? (optional)</span><input name="guests" maxlength="200" placeholder="Jordan (engineer), Maya (background vocals)" /></label>
-      <p class="dim" style="font-size:12.5px">Check the schedule below for open times. Can't make it? Cancel before your session; a no-show is charged the rate sheet's studio fee.</p>
+      <p class="dim" style="font-size:12.5px">Check the calendar above for open times. Can't make it? Cancel before your session; a no-show is charged the rate sheet's studio fee.</p>
       <button class="btn primary">${icon('send')}Send request</button></form>` : `<div class="note">${icon('lock')}Studio requests open once the season starts.</div>`}
     <div class="card"><div class="card-head"><h3>${icon('file')}My requests</h3><span class="more">${mine.length}</span></div>
       ${mine.length ? `<div class="bookings">${mine.map((b) => bookingRow(b)).join('')}</div>` : '<p class="muted">No requests yet.</p>'}</div>
@@ -1975,6 +2039,25 @@ const ACTIONS = {
       <form data-form="studio-decide"><input type="hidden" name="id" value="${b.id}" /><input type="hidden" name="action" value="${a}" />
         <label class="field"><span>Note to ${esc(nameOf(b.userId).split(' ')[0])} (optional)</span><input name="note" maxlength="300" placeholder="${a === 'approve' ? 'Bring your session files' : 'The studio is booked then. Try Thursday?'}" /></label>
         <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Back</button><button class="btn ${a === 'approve' ? 'primary' : 'danger'}">${{ approve: 'Approve', decline: 'Decline', cancel: 'Cancel session' }[a]}</button></div></form>`);
+  },
+  'cal-week': (el) => { const d = Number(el.dataset.d); S.ui.studioWeek = d === 0 ? 0 : Math.max(CAL_MIN_WEEK, Math.min(CAL_MAX_WEEK, (S.ui.studioWeek || 0) + d)); render(); },
+  // Tap a session on the calendar: its details, with the same buttons as the lists.
+  'cal-open': (el) => {
+    const b = S.state.bookings.find((x) => x.id === Number(el.dataset.id));
+    if (b) modal(`${modalHead('Studio session')}<div class="bookings">${bookingRow(b, { owner: isOwner() })}</div><div class="modal-foot"><button class="btn ghost" data-act="close-modal">Close</button></div>`, { wide: true });
+  },
+  // Tap an open time: fill in the request form with that day and time (to the half hour).
+  'cal-slot': (el, e) => {
+    const f = $('#studio-form'); if (!f) return;
+    const hour = Number(el.dataset.h0) + Math.floor(((e.clientY - el.getBoundingClientRect().top) / CAL_HOUR_PX) * 2) / 2;
+    const when = new Date(Number(el.dataset.day)); when.setHours(Math.floor(hour), hour % 1 ? 30 : 0, 0, 0);
+    if (when.getTime() < Date.now()) return toast('That time has already passed', 'err');
+    const pad = (n) => String(n).padStart(2, '0');
+    f.day.value = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+    f.time.value = `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+    f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    f.purpose.focus({ preventScroll: true });
+    toast(`${when.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })} at ${timeText(when.getTime())}: now say what you're recording`, 'ok', 'clock');
   },
   'studio-cancel': (el) => confirmModal('Cancel this request?', 'The time goes back to everyone else.', 'Cancel request', 'danger',
     () => act(() => api('POST', `/api/studio/${el.dataset.id}/cancel`), 'Request cancelled')),

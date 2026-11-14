@@ -780,3 +780,28 @@ input[type=time] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; b
 .request .hand .hand-acts { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 .request .hand .hand-acts .btn { margin-left: 0; }
 .request .rq-head .dim svg { width: 11px; height: 11px; vertical-align: -1px; margin-right: 2px; }
+
+/* ---------- studio calendar ---------- */
+.cal-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.cal-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
+.cal-legend .lg { display: inline-block; width: 12px; height: 12px; margin-left: 6px; border: 1px solid var(--dk); }
+.cal-legend .lg.approved { background: var(--ok); }
+.cal-legend .lg.pending { background: var(--note); border-style: dashed; }
+.cal-scroll { overflow-x: auto; background: var(--paper); box-shadow: var(--sunk); padding: 2px; }
+.cal-grid { display: grid; min-width: 560px; }
+.cal-corner, .cal-day { position: sticky; top: 0; padding: 5px 6px; background: var(--chrome); border-bottom: 1px solid var(--dk); font-size: 12px; text-align: center; }
+.cal-day b { font-size: 14px; }
+.cal-day.today { background: var(--red); color: #fff; }
+.cal-hours div { padding: 2px 6px 0 0; font-size: 10.5px; color: var(--dk); text-align: right; border-top: 1px solid var(--rule); box-sizing: border-box; }
+.cal-col { position: relative; border-left: 1px solid var(--rule);
+  background-image: linear-gradient(to bottom, var(--rule) 1px, transparent 1px); background-size: 100% 44px; }
+.cal-col.today { background-color: #fffdf2; }
+.cal-col.askable { cursor: copy; }
+.cal-col.askable:hover { background-color: #f1f6ee; }
+.cal-block { position: absolute; overflow: hidden; display: block; padding: 2px 5px; border: 1px solid #1d4a2a; background: var(--ok); color: #fff; text-align: left; font: inherit; font-size: 11.5px; line-height: 1.25; cursor: pointer; }
+.cal-block b, .cal-block small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-block small { font-size: 10.5px; opacity: .92; }
+.cal-block.st-pending { background: var(--note); color: var(--ink); border: 1px dashed #8a6d00; }
+.cal-block.mine { outline: 2px solid var(--brass); outline-offset: -1px; }
+.cal-block:hover { filter: brightness(1.08); }
+.cal-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--red); pointer-events: none; }
