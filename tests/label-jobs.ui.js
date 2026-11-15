@@ -61,6 +61,19 @@ const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS
   await o.click('#label-job-form button.primary'); await o.waitForTimeout(900);
   check('card says as many artists as possible', (await o.locator('.label-job', { hasText: 'as many artists as possible' }).count()) === 1
     && (await o.locator('.label-job', { hasText: 'as many artists as possible' }).locator('text=0 picked so far').count()) === 1);
+  // HQ shows the Job Board for both roles
+  await o.goto(`${B}/#/hq`); await o.waitForSelector('.hq-jobs');
+  check('owner HQ: Job Board card lists the open label job, with a Post button', (await o.locator('.hq-jobs tr', { hasText: 'Volunteer' }).count()) === 1 && (await o.locator('.hq-jobs button[data-act="label-job-new"]').count()) === 1);
+  check('filled and paid jobs drop off the HQ card', !(await o.locator('.hq-jobs tr', { hasText: 'Studio Assistant' }).count()));
+  await o.click('.hq-jobs button[data-act="label-job-new"]');
+  check('owner can post a label job straight from HQ', (await o.locator('#label-job-form').count()) === 1);
+  await o.click('.modal button[data-act="close-modal"]');
+  await o.screenshot({ path: `${out}/hq-jobs-owner.png` });
+  await s.goto(`${B}/#/hq`); await s.reload(); await s.waitForSelector('.hq-jobs');
+  check('student HQ: Job Board card with the job and a Post a request button', (await s.locator('.hq-jobs tr', { hasText: 'Volunteer' }).count()) === 1 && (await s.locator('.hq-jobs button[data-act="request-new"]').count()) === 1);
+  await s.click('.hq-jobs tr.clickable'); await s.waitForTimeout(400);
+  check('tapping a job on HQ opens the Job Board', s.url().endsWith('#/jobs'));
+  await s.goto(`${B}/#/hq`); await s.waitForSelector('.hq-jobs'); await s.screenshot({ path: `${out}/hq-jobs-phone.png`, fullPage: true });
   check('no JS errors', errors.length === 0, errors.join(' | '));
   console.log(`\n${pass} passed, ${failN} failed`);
   await browser.close();

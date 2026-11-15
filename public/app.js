@@ -590,6 +590,32 @@ function phaseBanner() {
 }
 
 // ============================================================ views
+/** HQ card: what's open on the Job Board right now (label jobs first), with the right button for each role. */
+function hqJobBoard() {
+  const st = S.state; const m = me();
+  // Open label jobs, plus ones still needing something: you're picked (artist) or someone is waiting to be paid (owner).
+  const labelOpen = st.requests.filter((q) => q.kind === 'label' && (q.status === 'open' || q.myStatus === 'picked' || (q.applicants || []).some((a) => a.status === 'picked')));
+  const artistOpen = st.requests.filter((q) => q.kind !== 'label' && q.status === 'open');
+  const list = [...labelOpen, ...artistOpen].slice(0, 5);
+  const more = labelOpen.length + artistOpen.length - list.length;
+  const postable = ['active', 'showcase'].includes(st.game.status);
+  const btn = isOwner() ? (postable ? `<button class="btn sm primary" data-act="label-job-new">${icon('plus')}Post a label job</button>` : '')
+    : m && live() ? `<button class="btn sm primary" data-act="request-new">${icon('plus')}Post a request</button>` : '';
+  const row = (q) => {
+    const label = q.kind === 'label';
+    const who = label ? '<b>The label</b>' : `<b>${esc(nameOf(q.userId))}</b>`;
+    const what = label ? esc(payoutName(q)) : requestWhat(q);
+    const tag = label ? (q.myStatus === 'picked' ? "You're picked!" : q.myStatus === 'paid' ? 'Paid' : (q.applicants || []).some((a) => a.status === 'picked') ? 'Waiting to be paid' : q.applied ? 'Hand raised' : q.spots == null ? 'As many as possible' : `${q.picked.length} of ${q.spots} picked`)
+      : q.userId === S.user.id ? plural(q.applicantCount, 'hand') : q.applied ? 'Hand raised' : plural(q.applicantCount, 'hand');
+    return `<tr class="clickable" data-act="nav" data-to="#/jobs"><td>${who} needs <b>${what}</b><div class="dim" style="font-size:12.5px">${label && q.whenText ? `${esc(q.whenText)} · ` : ''}${tag}</div></td>
+      <td class="r num gold">${q.amount != null ? money(q.amount) : ''}${label && (q.spots == null || q.spots > 1) ? '<div class="dim" style="font-size:11px;font-weight:400">each</div>' : ''}</td></tr>`;
+  };
+  return `<div class="card hq-jobs"><div class="card-head"><h3>${icon('bag')}Job Board</h3><a class="more" href="#/jobs">Open Job Board →</a></div>
+    ${list.length ? `<table class="t">${list.map(row).join('')}</table>${more > 0 ? `<p class="dim" style="font-size:12.5px;margin:6px 0 0">+ ${more} more on the Job Board</p>` : ''}`
+      : `<p class="muted">${isOwner() ? 'Nothing open. Need a volunteer or a studio assistant? Post a label job.' : 'Nothing open right now.'}</p>`}
+    ${btn ? `<div style="margin-top:10px">${btn}</div>` : ''}</div>`;
+}
+
 function hqView() {
   if (isOwner()) return ownerHqView();
   const m = me();
@@ -627,6 +653,7 @@ function hqView() {
       </div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
+        ${hqJobBoard()}
         ${lobbyVisible() ? `<div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(S.state.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 7))}</div>` : ''}
       </div>
     </div>`;
@@ -654,6 +681,7 @@ function ownerHqView() {
         ${review.length ? review.slice(0, 5).map(reviewItem).join('') : empty('check', 'Queue is clear', 'New contracts land here once both artists agree.')}</div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
+        ${hqJobBoard()}
         <div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(st.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 6))}</div>
       </div>
     </div>`;
