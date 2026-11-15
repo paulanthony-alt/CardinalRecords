@@ -71,6 +71,8 @@ Students can cancel their own requests before the session starts, and can have u
 
 Each artist can have up to 3 open requests. Others see how many hands are up, but not who. Owners see everything and can close any request. Moving an artist to another season closes their open requests.
 
+Both HQ screens have a **Job Board** card: the open label jobs and requests (up to 5), your own status on each, and a button to post one (**Post a request** for artists, **Post a label job** for owners).
+
 ### Label jobs (Record Owners post paid work)
 
 Owners can post **label jobs** on the Job Board with **Post a label job**, using any paid item from the rate sheet: **Volunteer in other GHS EMusic classes** (rate x class blocks) or **Studio Assistant** (an amount, at least the $15 minimum). Each job has how many artists are needed (a set number up to 30, or **as many as possible**, which has no limit and stays open until an owner closes it), when (free text, like "Tuesday, 3rd period") and details, and the lobby announces it. Label jobs are open while the season is live and during the Showcase.
