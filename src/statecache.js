@@ -13,6 +13,7 @@
 const crypto = require('node:crypto');
 const { db } = require('./db');
 const G = require('./game');
+const { noSchoolSet } = require('./schooldays');
 
 const BOOT = crypto.randomBytes(4).toString('hex'); // a restart makes every browser reload
 let REV = 0;
@@ -78,6 +79,9 @@ async function refresh(game) {
   e.likes = await db.all('SELECT l.track_id, l.user_id FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ?', gid);
   // Studio time: requests and sessions from the last 30 days on.
   e.bookings = await db.all('SELECT * FROM studio_bookings WHERE game_id = ? AND (starts_at > ? OR status = ?) ORDER BY starts_at', gid, Date.now() - 30 * 86_400_000, 'pending');
+  // Calendar dates Record Owners added (small table); no-school days push due dates back.
+  e.calendar = await db.all('SELECT * FROM calendar_events WHERE game_id = ? ORDER BY day, time, id', gid);
+  e.noSchool = noSchoolSet(e.calendar);
   // Studio challenges and their entries (small tables).
   e.challenges = await db.all('SELECT * FROM challenges WHERE game_id = ? ORDER BY starts_at DESC, id DESC LIMIT 100', gid);
   e.entries = e.challenges.length

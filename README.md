@@ -65,6 +65,23 @@ After a session's start time, owners can mark a **No-show**, which charges the r
 
 Students can cancel their own requests before the session starts, and can have up to 5 waiting at once. Sessions appear on the grading report as booked and no-shows. Owners' data download has every request; students' has only their own. Offloading a season deletes its requests.
 
+## Calendar
+
+**Calendar** in the menu shows every date in one place:
+- **deal due dates**: students see the deals they're part of, owners see every deal in progress (overdue ones in red);
+- **studio sessions**: approved ones for everyone, plus waiting requests (owners see all of them, students their own);
+- **studio challenges**: the day each opens and closes;
+- **the season**: Day 1 and the last day;
+- **dates the Record Owners add**: events, deadlines, showcases and **no-school days**.
+
+There's a **Month** view (tap a day to list its dates underneath; on phones each date is a colored dot) and a **Week** view (Monday to Sunday; one column per day on a laptop, stacked on a phone). **‹ Today ›** moves between months or weeks, and the colored buttons hide or show each kind of date. Tapping a date opens it: a deal, the studio session, the Challenges page, or the date's details.
+
+Owners add dates with **Add a date** (or the **+** on a day): a title, a type, the day, an optional last day (up to 60 days), an optional time (blank means all day) and details. New dates can be announced in the lobby (on by default; students' view of these posts is under lobby controls as "New dates on the calendar"). Owners can edit or delete a date from its details.
+
+**No-school days** (holidays, snow days, teacher workdays) count like weekends: deal due dates skip them. Adding, moving or deleting one updates the due dates of deals already in progress.
+
+HQ has a **Coming up** card with the next week's dates, for students and owners. Dates are in the data download and the backups; offloading a season deletes them.
+
 ## Job board
 
 **Job Board** in the menu: an artist posts what they need, using the rate sheet: a job, hours/items or project rate, an optional deadline, and details. The lobby announces it. Labelmates **raise a hand**, with an optional note. The poster sees who and picks one, and it becomes a normal deal that both have agreed to, so it goes straight to the Record Owners' review queue. The money goes into escrow at that point, so the poster needs the cash then.
@@ -81,7 +98,7 @@ Artists raise a hand with an optional note. Owners **Pick** up to the number of 
 
 ## Deal deadlines
 
-A deal's "due in X days" counts **school days**: weekends don't count. It starts the day the label approves the deal, and work is due by the end of the Xth weekday (11:59 PM school time). Approved Friday with 1 day is due at the end of Monday; approved on a weekend, counting starts Monday. School time is `America/New_York`, which can be changed with the `SCHOOL_TZ` environment variable. Holidays aren't skipped. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).
+A deal's "due in X days" counts **school days**: weekends don't count. It starts the day the label approves the deal, and work is due by the end of the Xth weekday (11:59 PM school time). Approved Friday with 1 day is due at the end of Monday; approved on a weekend, counting starts Monday. School time is `America/New_York`, which can be changed with the `SCHOOL_TZ` environment variable. **No-school days** on the Calendar are skipped too. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).
 
 ## Studio challenges
 
@@ -193,6 +210,7 @@ npm test
 - a stress test with 30 students at once;
 - a check that the shared cache matches the database;
 - PDF backups and offload;
+- the label calendar (dates, no-school days moving due dates) and its month and week views on a phone;
 - the sign-up flow, the owner-only steps and two-owner sync, in a browser.
 
 It prints a pass/fail summary and exits non-zero if anything fails. The browser suites need Playwright and are skipped without it (`SKIP_UI=1` skips them on purpose). `tests/live-smoke.js` checks the live site's sign-in page. A weekly check runs all of this and reports the site's status.

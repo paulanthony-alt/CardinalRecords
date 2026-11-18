@@ -4,6 +4,7 @@
 const PDFDocument = require('pdfkit');
 const { db } = require('./db');
 const G = require('./game');
+const { noSchoolSet } = require('./schooldays');
 const { sheetFor } = require('./rates');
 
 const RED = '#a8132b';
@@ -338,6 +339,7 @@ async function writeReportPdf(out, game, opts = {}) {
     if (!events.has(e.contract_id)) events.set(e.contract_id, []);
     events.get(e.contract_id).push(e);
   }
+  const noSchool = noSchoolSet(await db.all('SELECT kind, day, end_day FROM calendar_events WHERE game_id = ?', game.id));
   const chats = new Map((await db.all("SELECT actor_id AS k, COUNT(*) AS n FROM feed WHERE game_id = ? AND kind = 'chat' GROUP BY actor_id", game.id)).map((r) => [r.k, r.n]));
   const challengeRows = await db.all('SELECT e.user_id, e.place FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? AND c.status <> ?', game.id, 'cancelled');
   const studio = await db.all("SELECT user_id, status FROM studio_bookings WHERE game_id = ? AND status IN ('approved', 'noshow')", game.id);
@@ -352,8 +354,8 @@ async function writeReportPdf(out, game, opts = {}) {
     const sold = s.contracts.filter((c) => c.seller_id === p.id);
     const bought = s.contracts.filter((c) => c.buyer_id === p.id);
     const withDue = sold.filter((c) => c.due_days && c.approved_at && ['delivered', 'completed'].includes(c.status));
-    const late = withDue.filter((c) => G.deadline(c, events.get(c.id) || []).late);
-    const overdue = sold.filter((c) => G.deadline(c, events.get(c.id) || []).overdue);
+    const late = withDue.filter((c) => G.deadline(c, events.get(c.id) || [], noSchool).late);
+    const overdue = sold.filter((c) => G.deadline(c, events.get(c.id) || [], noSchool).overdue);
     const mine = s.ledger.filter((l) => l.user_id === p.id);
     const sum = (kinds) => mine.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + l.amount, 0);
     const tracks = s.tracks.filter((t) => t.user_id === p.id);
@@ -410,7 +412,7 @@ async function writeReportPdf(out, game, opts = {}) {
     doc.font('Helvetica-Bold').fontSize(10).fillColor('#1a1a1a').text('Work delivered as the artist', L, doc.y); doc.moveDown(0.25);
     table([{ h: 'No.', w: 9 }, { h: 'Job', w: 22, bold: true }, { h: 'Client', w: 17 }, { h: 'Amount', w: 10, align: 'right' }, { h: 'Status', w: 11 }, { h: 'Due', w: 13 }, { h: 'Delivery', w: 18 }],
       c.sold.map((k) => {
-        const d = G.deadline(k, events.get(k.id) || []);
+        const d = G.deadline(k, events.get(k.id) || [], noSchool);
         const delivery = d.deliveredAt ? `${date(d.deliveredAt)}${d.dueAt ? (d.late ? ' (late)' : ' (on time)') : ''}` : d.overdue ? 'OVERDUE' : '';
         return [`CR-${String(k.id).padStart(4, '0')}`, jobName(k), nm(k.buyer_id), money(k.amount), k.status, d.dueAt ? date(d.dueAt) : '', delivery];
       }), game.name, { size: 7.5 });

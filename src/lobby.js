@@ -21,6 +21,7 @@ const CATEGORIES = [
   ['profile', 'Artist profiles shared', ['profile']],
   ['request', 'Job board requests', ['request']],
   ['challenge', 'Studio challenges and winners', ['challenge']],
+  ['calendar', 'New dates on the calendar', ['calendar']],
   ['release', 'Release Guide finished', ['release']],
   ['phase', 'Season updates (start, end, music sharing)', ['phase']],
 ];

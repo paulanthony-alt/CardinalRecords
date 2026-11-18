@@ -537,7 +537,7 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
         terms: party ? c.terms : '', amount: c.amount, escrow: c.escrow, dueDays: c.due_days, status: c.status,
         rating: c.rating, createdAt: c.created_at, updatedAt: c.updated_at, approvedAt: c.approved_at, completedAt: c.completed_at,
         events: party ? (e.events.get(c.id) || []).map((x) => ({ actorId: x.actor_id, action: x.action, note: x.note, amount: x.amount, at: x.created_at })) : [],
-        ...(({ dueAt, deliveredAt, overdue, late }) => ({ dueAt, deliveredAt, overdue, late }))(G.deadline(c, e.events.get(c.id) || [])),
+        ...(({ dueAt, deliveredAt, overdue, late }) => ({ dueAt, deliveredAt, overdue, late }))(G.deadline(c, e.events.get(c.id) || [], e.noSchool)),
       };
     });
 
@@ -580,6 +580,8 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
         decidedAt: x.decided_at, createdAt: x.created_at,
       };
     }),
+    // Calendar: dates the Record Owners added, for everyone in the season.
+    calendar: (e.calendar || []).map((x) => ({ id: x.id, title: x.title, kind: x.kind, day: x.day, endDay: x.end_day, time: x.time, details: x.details, createdAt: x.created_at })),
     challenges: (e.challenges || []).map((c) => {
       const all = (e.entries || []).filter((x) => x.challenge_id === c.id);
       const closed = c.status !== 'active' || Date.now() >= c.ends_at;
@@ -755,6 +757,70 @@ app.post('/api/studio/:bookingId/noshow', auth, ownerOnly, async (req, res) => {
     if (fee?.amount > 0) await G.ledgerEntry(game.id, b.user_id, -fee.amount, 'fine', { memo: `${fee.name}: ${new Date(Number(b.starts_at)).toISOString().slice(0, 10)}`, by: req.user.id });
   });
   res.json({ ok: true, fee: fee?.amount || 0 });
+});
+
+// ---------- label calendar ----------
+// Record Owners add dates everyone sees: class showcases, deadlines, other events, and
+// no-school days (holidays, snow days), which deal due dates skip like weekends.
+const CAL_KINDS = { event: 'Event', deadline: 'Deadline', showcase: 'Showcase', noschool: 'No school' };
+const realDay = (v, what) => {
+  const d = String(v ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) !== d) fail(`Pick a ${what}`);
+  return d;
+};
+function calendarInput(b, cur = null) {
+  const title = str(b.title ?? cur?.title, 'Title', { min: 2, max: 80 });
+  const kind = String(b.kind ?? cur?.kind ?? 'event');
+  if (!CAL_KINDS[kind]) fail('Pick a type of date');
+  const day = realDay(b.day ?? cur?.day, 'day');
+  const endDay = b.endDay === '' || (b.endDay == null && !cur) ? day : realDay(b.endDay ?? cur.end_day, 'last day');
+  if (endDay < day) fail('The last day has to be on or after the first day');
+  if ((Date.parse(endDay) - Date.parse(day)) / G.DAY > 60) fail('A date on the calendar can cover up to 60 days');
+  let time = String(b.time ?? cur?.time ?? '').trim();
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) fail('Pick a time, or leave it blank for all day');
+  if (kind === 'noschool') time = '';
+  const details = str(b.details ?? cur?.details, 'Details', { max: 500 });
+  return { title, kind, day, endDay, time, details };
+}
+async function calendarFor(req) {
+  const x = await db.get('SELECT * FROM calendar_events WHERE id = ?', int(req.params.eventId, 'Date'));
+  if (!x) fail('That date is gone from the calendar', 404);
+  const game = await G.getGame(x.game_id);
+  if (['archived', 'offloaded'].includes(game.status)) fail('This season is archived');
+  return { x, game };
+}
+const calDayText = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+const calWhenText = (v) => `${calDayText(v.day)}${v.endDay !== v.day ? ` to ${calDayText(v.endDay)}` : ''}${v.time ? ` at ${new Date(`2000-01-01T${v.time}:00Z`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })}` : ''}`;
+
+app.post('/api/games/:gameId/calendar', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const v = calendarInput(req.body || {});
+  const now = Date.now();
+  const { id } = await db.run(
+    'INSERT INTO calendar_events (game_id, title, kind, day, end_day, time, details, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    game.id, v.title, v.kind, v.day, v.endDay, v.time, v.details, req.user.id, now, now
+  );
+  if (req.body?.announce !== false) {
+    await G.post(game.id, 'calendar', req.user.id, v.kind === 'noschool'
+      ? `On the calendar: no school ${calWhenText(v)} (${v.title}). Deal due dates skip it, like a weekend.`
+      : `On the calendar: ${v.title}, ${calWhenText(v)}.`);
+  }
+  res.json({ id });
+});
+
+app.patch('/api/calendar/:eventId', auth, ownerOnly, async (req, res) => {
+  const { x } = await calendarFor(req);
+  const v = calendarInput(req.body || {}, x);
+  await db.run('UPDATE calendar_events SET title = ?, kind = ?, day = ?, end_day = ?, time = ?, details = ?, updated_at = ? WHERE id = ?',
+    v.title, v.kind, v.day, v.endDay, v.time, v.details, Date.now(), x.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/calendar/:eventId', auth, ownerOnly, async (req, res) => {
+  const { x } = await calendarFor(req);
+  await db.run('DELETE FROM calendar_events WHERE id = ?', x.id);
+  res.json({ ok: true });
 });
 
 // ---------- studio challenges ----------
@@ -1196,6 +1262,7 @@ async function exportData(game, viewer) {
     challenge_entries: (await db.all('SELECT e.*, c.status AS c_status, c.ends_at AS c_ends FROM challenge_entries e JOIN challenges c ON c.id = e.challenge_id WHERE c.game_id = ? ORDER BY e.challenge_id, e.created_at', game.id))
       .filter((x) => isOwner || x.user_id === viewer.id || x.c_status !== 'active' || Date.now() >= x.c_ends)
       .map(({ c_status, c_ends, ...x }) => x),
+    calendar_events: await db.all('SELECT id, title, kind, day, end_day, time, details, created_at FROM calendar_events WHERE game_id = ? ORDER BY day, time, id', game.id),
     job_requests: await db.all('SELECT id, kind, user_id, job_id, pricing, quantity, due_days, payout_id, amount, spots, when_text, details, status, contract_id, created_at FROM job_requests WHERE game_id = ? ORDER BY id', game.id),
   };
 }
@@ -1282,6 +1349,7 @@ async function purgeSeason(gameId) {
   await db.run('DELETE FROM job_requests WHERE game_id = ?', gameId); // applicants go with them
   await db.run('DELETE FROM challenges WHERE game_id = ?', gameId); // entries go with them
   await db.run('DELETE FROM studio_bookings WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM calendar_events WHERE game_id = ?', gameId);
   const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
     AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
     AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)

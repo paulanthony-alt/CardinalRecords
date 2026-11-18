@@ -62,6 +62,7 @@ const ICONS = {
   refresh: '<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
 };
 const icon = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
@@ -443,6 +444,7 @@ function navItems() {
     { to: 'contracts', label: 'Contracts', ic: 'file', count: isOwner() ? 0 : contractsNeeding },
     { to: 'jobs', label: 'Job Board', ic: 'bag', count: isOwner() ? labelJobsToPay().length : myRequestsWithHands() },
     { to: 'challenges', label: 'Challenges', ic: 'award', count: challengesToEnter() },
+    { to: 'calendar', label: 'Calendar', ic: 'calendar' },
     { to: 'studio', label: 'Studio', ic: 'clock', count: isOwner() ? studioPending().length : 0 },
     { to: 'roster', label: 'Roster', ic: 'users' },
     { to: 'charts', label: 'Charts', ic: 'chart' },
@@ -653,6 +655,7 @@ function hqView() {
       </div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
+        ${hqComingUp()}
         ${hqJobBoard()}
         ${lobbyVisible() ? `<div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(S.state.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 7))}</div>` : ''}
       </div>
@@ -681,6 +684,7 @@ function ownerHqView() {
         ${review.length ? review.slice(0, 5).map(reviewItem).join('') : empty('check', 'Queue is clear', 'New contracts land here once both artists agree.')}</div>
       <div class="stack">
         <div class="card"><div class="card-head"><h3>${icon('chart')}The Cardinal Chart</h3><a class="more" href="#/charts">Full chart →</a></div>${miniChart()}</div>
+        ${hqComingUp()}
         ${hqJobBoard()}
         <div class="card"><div class="card-head"><h3>${icon('message')}Lobby</h3><a class="more" href="#/lobby">Open lobby →</a></div>${pinnedPost()}${feedList(st.feed.filter((f) => f.id !== lobby().pinned?.id).slice(0, 6))}</div>
       </div>
@@ -728,7 +732,7 @@ function profilesSection() {
   </div>`;
 }
 
-const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award', profile: 'user', request: 'bag', challenge: 'award' };
+const FEED_ICON = { deal: 'file', paid: 'dollar', grant: 'dollar', fine: 'dollar', join: 'user', service: 'bag', track: 'music', phase: 'clock', chat: 'message', announcement: 'shield', release: 'award', profile: 'user', request: 'bag', challenge: 'award', calendar: 'calendar' };
 /** Owner-only buttons on a lobby post: hide/show, pin, delete, and mute the student who wrote it. */
 function modTools(f) {
   if (!isOwner()) return '';
@@ -1467,6 +1471,148 @@ function studioView() {
     ${scheduleCard}`;
 }
 
+// ---------- label calendar ----------
+// Every date in one place: deal due dates, studio sessions, challenges, the season's start
+// and end, plus dates the Record Owners add (showcases, deadlines, events, no-school days).
+const CAL_KIND = { event: 'Event', deadline: 'Deadline', showcase: 'Showcase', noschool: 'No school' };
+const CAL_FILTERS = [['events', 'Label events'], ['deals', 'Deal due dates'], ['studio', 'Studio'], ['challenges', 'Challenges'], ['season', 'Season']];
+const calKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const calDate = (key) => { const [y, m, d] = key.split('-').map(Number); return new Date(y, m - 1, d); };
+const calDayLabel = (key, opts = { weekday: 'long', month: 'long', day: 'numeric' }) => calDate(key).toLocaleDateString(undefined, opts);
+const hmText = (t) => (t ? new Date(2000, 0, 1, ...t.split(':').map(Number)).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '');
+const calHidden = () => (S.ui.calHide ||= new Set());
+
+/** Everything with a date, as { type, day, endDay, time, sort, title, sub, attrs }. Days are local yyyy-mm-dd. */
+function calItems() {
+  const st = S.state; const out = [];
+  if (!st) return out;
+  for (const x of st.calendar || []) {
+    out.push({ type: x.kind === 'noschool' ? 'noschool' : 'events', kind: x.kind, day: x.day, endDay: x.endDay, time: hmText(x.time), sort: x.time || '',
+      title: x.title, sub: CAL_KIND[x.kind], attrs: `data-act="cal-event" data-id="${x.id}"` });
+  }
+  for (const c of st.contracts) {
+    if (!c.dueAt || c.status !== 'active') continue;
+    if (!isOwner() && c.buyerId !== S.user.id && c.sellerId !== S.user.id) continue;
+    const mine = c.sellerId === S.user.id;
+    out.push({ type: 'deals', day: calKey(new Date(c.dueAt)), time: '', sort: '', late: c.overdue,
+      title: `${mine ? 'You deliver' : 'Due'}: ${c.title}`, sub: `${esc(nameOf(c.sellerId))} for ${esc(nameOf(c.buyerId))}${c.overdue ? ' · overdue' : ''}`, attrs: `data-act="nav" data-to="#/contract/${c.id}"` });
+  }
+  for (const b of st.bookings || []) {
+    if (!['approved', 'pending'].includes(b.status)) continue;
+    out.push({ type: 'studio', pending: b.status === 'pending', day: calKey(new Date(b.startsAt)), time: `${timeText(b.startsAt)}–${timeText(b.startsAt + b.minutes * 60_000)}`,
+      sort: new Date(b.startsAt).toTimeString().slice(0, 5), title: `Studio: ${nameOf(b.userId)}`, sub: b.status === 'pending' ? 'Waiting for a teacher' : (b.purpose ? esc(b.purpose) : 'Studio session'), attrs: `data-act="cal-open" data-id="${b.id}"` });
+  }
+  for (const c of st.challenges || []) {
+    if (c.status === 'cancelled') continue;
+    out.push({ type: 'challenges', day: calKey(new Date(c.startsAt)), time: '', sort: '', title: `Challenge opens: ${c.title}`, sub: 'Studio challenge', attrs: 'data-act="nav" data-to="#/challenges"' });
+    out.push({ type: 'challenges', day: calKey(new Date(c.endsAt - 1)), time: '', sort: '', title: `Challenge closes: ${c.title}`, sub: 'Last day to enter', attrs: 'data-act="nav" data-to="#/challenges"' });
+  }
+  const g = st.game;
+  if (g.started_at) {
+    out.push({ type: 'season', day: calKey(new Date(g.started_at)), time: '', sort: '', title: 'Season starts (Day 1)', sub: esc(g.name), attrs: 'data-act="nav" data-to="#/hq"' });
+    const end = g.ended_at && g.status !== 'active' ? g.ended_at : g.clock?.endsAt;
+    if (end) out.push({ type: 'season', day: calKey(new Date(end)), time: '', sort: '', title: g.ended_at && g.status !== 'active' ? 'Season ended' : 'Last day of the season', sub: esc(g.name), attrs: 'data-act="nav" data-to="#/hq"' });
+  }
+  return out;
+}
+/** The items on one day (multi-day dates show on each of their days), filtered by the chips. */
+function calOn(items, key) {
+  const hide = calHidden();
+  return items.filter((i) => i.day <= key && key <= (i.endDay || i.day) && (i.type === 'noschool' ? !hide.has('events') : !hide.has(i.type)))
+    .sort((a, b) => (a.type === 'noschool' ? -1 : 0) - (b.type === 'noschool' ? -1 : 0) || (a.sort || '').localeCompare(b.sort || '') || a.title.localeCompare(b.title));
+}
+const calRow = (i) => `<button type="button" class="cal-item t-${i.type} ${i.pending ? 'pending' : ''} ${i.late ? 'late' : ''}" ${i.attrs}>
+  <i class="dot"></i><span class="ci-main"><b>${esc(i.title)}</b><small>${i.time ? `${i.time} · ` : ''}${i.sub || ''}</small></span></button>`;
+
+function calendarView() {
+  const st = S.state; const items = calItems();
+  const view = S.ui.calView || 'month';
+  const today = calKey(new Date());
+  const hide = calHidden();
+  const owner = isOwner() && st.game.status !== 'archived';
+  let title; let body; let sel = S.ui.calDay;
+  if (view === 'month') {
+    const first = new Date(); first.setHours(0, 0, 0, 0); first.setDate(1); first.setMonth(first.getMonth() + (S.ui.calMonth || 0));
+    const start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7));
+    const inMonth = (d) => d.getMonth() === first.getMonth();
+    const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    const weeks = Math.ceil((((first.getDay() + 6) % 7) + last.getDate()) / 7);
+    title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    if (!sel || calDate(sel).getMonth() !== first.getMonth() || calDate(sel).getFullYear() !== first.getFullYear()) sel = inMonth(new Date()) && !(S.ui.calMonth) ? today : calKey(first);
+    const cells = [];
+    for (let i = 0; i < weeks * 7; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i);
+      const key = calKey(d); const list = calOn(items, key);
+      const off = list.some((x) => x.type === 'noschool');
+      const chips = list.filter((x) => x.type !== 'noschool');
+      cells.push(`<button type="button" class="mc-cell ${inMonth(d) ? '' : 'out'} ${key === today ? 'today' : ''} ${key === sel ? 'sel' : ''} ${off ? 'noschool' : ''} ${d.getDay() % 6 === 0 ? 'wkend' : ''}" data-act="cal-day" data-day="${key}" aria-label="${calDayLabel(key)}: ${plural(list.length, 'date')}">
+        <span class="mc-num">${d.getDate()}</span>${off ? '<span class="mc-off">No school</span>' : ''}
+        <span class="mc-items">${chips.slice(0, 3).map((x) => `<span class="mc-chip t-${x.type} ${x.pending ? 'pending' : ''} ${x.late ? 'late' : ''}">${esc(x.title)}</span>`).join('')}${chips.length > 3 ? `<span class="mc-more">+${chips.length - 3} more</span>` : ''}</span></button>`);
+    }
+    const dayList = calOn(items, sel);
+    body = `<div class="month-grid">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((w) => `<div class="mc-head">${w}</div>`).join('')}${cells.join('')}</div>
+      <div class="cal-agenda"><div class="card-head"><h3>${esc(calDayLabel(sel))}</h3>${owner ? `<button class="btn sm" data-act="cal-new" data-day="${sel}">${icon('plus')}Add a date</button>` : ''}</div>
+        ${dayList.length ? `<div class="cal-items">${dayList.map(calRow).join('')}</div>` : '<p class="muted">Nothing on this day.</p>'}</div>`;
+  } else {
+    const start = weekStart(S.ui.calWeek || 0);
+    const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+    title = `${days[0].toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${days[6].toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    body = `<div class="week-list">${days.map((d) => {
+      const key = calKey(d); const list = calOn(items, key);
+      return `<div class="wk-day ${key === today ? 'today' : ''} ${list.some((x) => x.type === 'noschool') ? 'noschool' : ''} ${d.getDay() % 6 === 0 ? 'wkend' : ''}">
+        <div class="wk-head"><span>${d.toLocaleDateString(undefined, { weekday: 'short' })}</span><b>${d.getDate()}</b>${owner ? `<button class="btn sm ghost" data-act="cal-new" data-day="${key}" aria-label="Add a date on ${calDayLabel(key)}">${icon('plus')}</button>` : ''}</div>
+        ${list.length ? `<div class="cal-items">${list.map(calRow).join('')}</div>` : '<p class="dim wk-empty">Nothing</p>'}</div>`;
+    }).join('')}</div>`;
+  }
+  const step = view === 'month' ? 'calMonth' : 'calWeek';
+  return `${pageHead('The Label', 'Calendar', 'Every date in one place: deals due, studio sessions, challenges, the season, and dates your teachers add, like showcases and no-school days.',
+      owner ? `<button class="btn primary" data-act="cal-new">${icon('plus')}Add a date</button>` : '')}
+    <div class="card label-cal">
+      <div class="cal-bar">
+        <div class="tabs cal-tabs" role="tablist">${[['month', 'Month'], ['week', 'Week']].map(([v, l]) => `<button class="${view === v ? 'on' : ''}" data-act="cal-view" data-v="${v}" role="tab" aria-selected="${view === v}">${l}</button>`).join('')}</div>
+        <button class="btn sm" data-act="cal-step" data-k="${step}" data-d="-1" aria-label="Previous">‹</button>
+        <button class="btn sm" data-act="cal-step" data-k="${step}" data-d="0" ${S.ui[step] ? '' : 'disabled'}>Today</button>
+        <button class="btn sm" data-act="cal-step" data-k="${step}" data-d="1" aria-label="Next">›</button>
+        <h3 class="cal-title">${title}</h3>
+      </div>
+      <div class="cal-filters">${CAL_FILTERS.map(([k, l]) => `<button type="button" class="cal-filter t-${k} ${hide.has(k) ? 'off' : ''}" data-act="cal-filter" data-k="${k}" aria-pressed="${!hide.has(k)}"><i class="dot"></i>${l}</button>`).join('')}</div>
+      ${body}
+      <p class="dim cal-foot">Deal due dates count school days only: weekends and no-school days on this calendar are skipped.${isOwner() ? ' Students see their own deals; you see every deal in progress.' : ' You see the deals you\'re part of.'}</p>
+    </div>`;
+}
+
+/** HQ: what's coming up in the next week. */
+function hqComingUp() {
+  const items = calItems(); const out = [];
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 8 && out.length < 6; i++) {
+    const key = calKey(d);
+    for (const x of calOn(items, key)) if (out.length < 6 && !(x.endDay && x.day < key)) out.push({ ...x, on: key });
+    d.setDate(d.getDate() + 1);
+  }
+  const label = (key) => (key === calKey(new Date()) ? 'Today' : key === calKey(new Date(Date.now() + 86_400_000)) ? 'Tomorrow' : calDayLabel(key, { weekday: 'short', month: 'short', day: 'numeric' }));
+  return `<div class="card hq-cal"><div class="card-head"><h3>${icon('calendar')}Coming up</h3><a class="more" href="#/calendar">Open calendar →</a></div>
+    ${out.length ? `<table class="t">${out.map((x) => `<tr class="clickable" ${x.attrs}><td class="hc-when">${label(x.on)}</td><td><i class="cal-dot t-${x.type}"></i>${esc(x.title)}${x.time ? `<div class="dim" style="font-size:12px">${x.time}</div>` : ''}</td></tr>`).join('')}</table>`
+      : '<p class="muted">Nothing on the calendar this week.</p>'}</div>`;
+}
+
+/** Owners: add or edit a date on the calendar. */
+function calEventModal(x = null, day = null) {
+  const kind = x?.kind || 'event';
+  modal(`${modalHead(x ? 'Edit date' : 'Add a date to the calendar', 'Everyone on the label sees it on the Calendar page. No-school days push deal due dates back, like a weekend.')}
+    <form data-form="cal-event" id="cal-form">${x ? `<input type="hidden" name="id" value="${x.id}" />` : ''}
+      <label class="field"><span>Title</span><input name="title" required minlength="2" maxlength="80" value="${esc(x?.title || '')}" placeholder="Winter Showcase" /></label>
+      <div class="row">
+        <label class="field"><span>Type</span><select name="kind" data-change="cal-kind">${Object.entries(CAL_KIND).map(([k, l]) => `<option value="${k}" ${k === kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Day</span><input name="day" type="date" required value="${x?.day || day || calKey(new Date())}" /></label>
+        <label class="field"><span>Last day (if longer)</span><input name="endDay" type="date" value="${x && x.endDay !== x.day ? x.endDay : ''}" /></label>
+        <label class="field" id="cal-time" ${kind === 'noschool' ? 'hidden' : ''}><span>Time (blank = all day)</span><input name="time" type="time" value="${x?.time || ''}" /></label>
+      </div>
+      <label class="field"><span>Details (optional)</span><textarea name="details" maxlength="500" placeholder="In the auditorium. Each artist plays one track.">${esc(x?.details || '')}</textarea></label>
+      ${x ? '' : '<label class="check"><input type="checkbox" name="announce" value="1" checked /> Announce it in the lobby</label>'}
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon(x ? 'check' : 'plus')}${x ? 'Save' : 'Add to calendar'}</button></div></form>`, { wide: true });
+}
+
 // ---------- studio challenges ----------
 /** Where a challenge is right now, worked out from its dates (they pass without anyone clicking). */
 function challengePhase(c, now = Date.now()) {
@@ -1940,6 +2086,7 @@ function viewFor() {
     case 'jobs': return jobsView();
     case 'challenges': return challengesView();
     case 'studio': return studioView();
+    case 'calendar': return calendarView();
     case 'contract': return contractDetailView(id);
     case 'roster': return rosterView();
     case 'artist': return artistView(id);
@@ -2067,6 +2214,26 @@ const ACTIONS = {
       <form data-form="studio-decide"><input type="hidden" name="id" value="${b.id}" /><input type="hidden" name="action" value="${a}" />
         <label class="field"><span>Note to ${esc(nameOf(b.userId).split(' ')[0])} (optional)</span><input name="note" maxlength="300" placeholder="${a === 'approve' ? 'Bring your session files' : 'The studio is booked then. Try Thursday?'}" /></label>
         <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Back</button><button class="btn ${a === 'approve' ? 'primary' : 'danger'}">${{ approve: 'Approve', decline: 'Decline', cancel: 'Cancel session' }[a]}</button></div></form>`);
+  },
+  'cal-view': (el) => { S.ui.calView = el.dataset.v; render(); },
+  'cal-step': (el) => { const d = Number(el.dataset.d); S.ui[el.dataset.k] = d === 0 ? 0 : (S.ui[el.dataset.k] || 0) + d; if (d === 0) S.ui.calDay = null; render(); },
+  'cal-day': (el) => { S.ui.calDay = el.dataset.day; render(); },
+  'cal-filter': (el) => { const h = calHidden(); h.has(el.dataset.k) ? h.delete(el.dataset.k) : h.add(el.dataset.k); render(); },
+  'cal-new': (el) => calEventModal(null, el.dataset.day || S.ui.calDay),
+  'cal-edit': (el) => calEventModal(S.state.calendar.find((x) => x.id === Number(el.dataset.id))),
+  'cal-delete': (el) => {
+    const x = S.state.calendar.find((y) => y.id === Number(el.dataset.id));
+    confirmModal(`Delete "${esc(x.title)}"?`, x.kind === 'noschool' ? 'It comes off the calendar, and deal due dates count that day again.' : 'It comes off the calendar for everyone.', 'Delete', 'danger',
+      () => act(() => api('DELETE', `/api/calendar/${x.id}`), 'Removed from the calendar'));
+  },
+  // A date the Record Owners added: details, plus Edit / Delete for owners.
+  'cal-event': (el) => {
+    const x = S.state.calendar.find((y) => y.id === Number(el.dataset.id)); if (!x) return;
+    const when = `${calDayLabel(x.day)}${x.endDay !== x.day ? ` to ${calDayLabel(x.endDay)}` : ''}${x.time ? ` at ${hmText(x.time)}` : x.kind === 'noschool' ? '' : ' · all day'}`;
+    modal(`${modalHead(esc(x.title))}<p><span class="chip cal-kind t-${x.kind === 'noschool' ? 'noschool' : 'events'}">${CAL_KIND[x.kind]}</span> <b>${when}</b></p>
+      ${x.details ? `<div class="terms">${esc(x.details)}</div>` : ''}
+      ${x.kind === 'noschool' ? `<div class="note">${icon('clock')}No school: deal due dates skip this day, like a weekend.</div>` : ''}
+      <div class="modal-foot">${isOwner() && S.state.game.status !== 'archived' ? `<button class="btn ghost" data-act="cal-delete" data-id="${x.id}">${icon('trash')}Delete</button><button class="btn" data-act="cal-edit" data-id="${x.id}">${icon('edit')}Edit</button>` : ''}<button class="btn primary" data-act="close-modal">Close</button></div>`);
   },
   'cal-week': (el) => { const d = Number(el.dataset.d); S.ui.studioWeek = d === 0 ? 0 : Math.max(CAL_MIN_WEEK, Math.min(CAL_MAX_WEEK, (S.ui.studioWeek || 0) + d)); render(); },
   // Tap a session on the calendar: its details, with the same buttons as the lists.
@@ -2356,6 +2523,13 @@ const FORMS = {
     const msg = { approve: 'Session approved', decline: 'Request declined', cancel: 'Session cancelled' }[d.action];
     if (await act(() => api('POST', `/api/studio/${d.id}/decide`, { action: d.action, note: d.note }), msg)) closeModal();
   },
+  'cal-event': async (d) => {
+    const body = { title: d.title, kind: d.kind, day: d.day, endDay: d.endDay || '', time: d.kind === 'noschool' ? '' : d.time || '', details: d.details || '' };
+    if (!d.id) body.announce = !!d.announce;
+    if (await act(() => (d.id ? api('PATCH', `/api/calendar/${d.id}`, body) : api('POST', `/api/games/${S.gameId}/calendar`, body)), d.id ? 'Saved' : 'Added to the calendar')) {
+      closeModal(); S.ui.calDay = d.day; location.hash = '#/calendar';
+    }
+  },
   challenge: async (d) => {
     const startsAt = new Date(`${d.from}T00:00:00`).getTime();
     const endsAt = new Date(`${d.to}T23:59:59`).getTime();
@@ -2458,6 +2632,8 @@ document.addEventListener('change', async (e) => {
     await refresh();
   } else if (k === 'label-job-spots') {
     const f = $('#label-job-form'); if (f) f.spots.disabled = f.querySelector('input[name=spotsMode]:checked').value === 'any';
+  } else if (k === 'cal-kind') {
+    const t = $('#cal-time'); if (t) t.hidden = el.value === 'noschool';
   } else if (k === 'label-job-calc') {
     labelJobCalc(true);
   } else if (k === 'lobby-chat') {
