@@ -266,6 +266,24 @@ CREATE INDEX IF NOT EXISTS idx_contracts_game  ON contracts(game_id, status);
 CREATE INDEX IF NOT EXISTS idx_feed_game       ON feed(game_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_contract ON contract_events(contract_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user   ON sessions(user_id);
+
+-- Label calendar: dates Record Owners add (class showcases, deadlines, no-school days).
+-- day / end_day are school-calendar dates (YYYY-MM-DD); time is '' (all day) or 'HH:MM'.
+-- kind: event | deadline | showcase | noschool (no-school days don't count toward due dates).
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id          SERIAL  PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  title       TEXT    NOT NULL,
+  kind        TEXT    NOT NULL DEFAULT 'event',
+  day         TEXT    NOT NULL,
+  end_day     TEXT    NOT NULL,
+  time        TEXT    NOT NULL DEFAULT '',
+  details     TEXT    NOT NULL DEFAULT '',
+  created_by  INTEGER,
+  created_at  BIGINT  NOT NULL,
+  updated_at  BIGINT  NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_game ON calendar_events(game_id, day);
 `;
 
 // Statements inside tx() run on that transaction's client; everything else uses the pool.

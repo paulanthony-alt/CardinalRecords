@@ -1,6 +1,6 @@
 // School-day due dates: weekends don't count; due by 11:59:59 PM school time.
 // Usage: node tests/schooldays.test.js   (no server needed)
-const { schoolDueAt, localParts } = require('../src/schooldays');
+const { schoolDueAt, localParts, noSchoolSet } = require('../src/schooldays');
 let pass = 0, failN = 0;
 const check = (n, c, x = '') => { c ? pass++ : failN++; console.log(`${c ? 'PASS' : 'FAIL'} ${n}${x ? ' — ' + x : ''}`); };
 const TZ = 'America/New_York';
@@ -29,4 +29,10 @@ for (let i = 0; i < 400; i++) {
   for (const n of [1, 2, 3, 5, 10]) { const wd = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(new Date(schoolDueAt(start, n, TZ))); if (wd === 'Sat' || wd === 'Sun') weekend++; }
 }
 check('never due on a weekend (2,000 random approvals)', weekend === 0, `${weekend} on weekends`);
+// No-school days on the calendar are skipped like weekends.
+const off = noSchoolSet([{ kind: 'noschool', day: '2026-11-26', end_day: '2026-11-27' }]); // Thanksgiving Thu + Fri
+const dueOff = (when, days) => show(schoolDueAt(et(when), days, TZ, off));
+check('no-school days skipped: Wednesday + 1 over Thanksgiving -> end of Monday', dueOff('2026-11-25 10:00', 1) === 'Mon, Nov 30, 11:59:59 PM', dueOff('2026-11-25 10:00', 1));
+check('no-school days skipped: Tuesday + 3 -> end of Tuesday after', dueOff('2026-11-24 10:00', 3) === 'Tue, Dec 1, 11:59:59 PM', dueOff('2026-11-24 10:00', 3));
+check('other kinds of dates do not change due dates', noSchoolSet([{ kind: 'showcase', day: '2026-11-26', end_day: '2026-11-26' }]).size === 0);
 console.log(`\n${pass} passed, ${failN} failed`);

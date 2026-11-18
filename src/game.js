@@ -270,12 +270,12 @@ async function createContract(game, buyer, body, { acceptedBy = null } = {}) {
 // ---------- deadlines ----------
 /**
  * When a deal is due: `due_days` school days after the label approved it (weekends don't
- * count; due by the end of that day, school time). Work starts at approval.
+ * or no-school days on the calendar count; due by the end of that day, school time). Work starts at approval.
  * Returns { dueAt, deliveredAt, overdue, late } (times in ms, or null).
  */
-function deadline(c, events = []) {
+function deadline(c, events = [], noSchool = null) {
   if (!c.due_days || !c.approved_at) return { dueAt: null, deliveredAt: null, overdue: false, late: false };
-  const dueAt = schoolDueAt(c.approved_at, c.due_days); // school days: weekends don't count
+  const dueAt = schoolDueAt(c.approved_at, c.due_days, undefined, noSchool); // school days: weekends and no-school days don't count
   const delivered = events.filter((e) => e.action === 'deliver' || e.action === 'complete').map((e) => Number(e.created_at)).sort((a, b) => a - b)[0] || null;
   const overdue = c.status === 'active' && Date.now() > dueAt;
   const late = delivered ? delivered > dueAt : overdue;
