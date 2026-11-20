@@ -797,13 +797,49 @@ function lobbyView() {
 const unitLabel = (j) => (j.unit === 'item' ? 'per item' : 'per hour / class');
 const fineAmount = (f) => (f.type === 'percent' ? `${f.min}% to ${f.max}% of account` : f.type === 'min' ? `${money(f.amount)} minimum` : f.type === 'per' ? `${money(f.amount)} per ${f.per}` : money(f.amount));
 
+/** Owners: Edit / Remove buttons on items they added to the rate sheet. */
+const rateItemTools = (x, section) => (isOwner() && x.custom && S.state.game.status !== 'archived'
+  ? `<span class="ri-tools"><span class="chip s-offered">Added</span><button class="btn sm ghost" data-act="rate-item-edit" data-section="${section}" data-id="${esc(x.id)}">${icon('edit')}Edit</button><button class="btn sm ghost" data-act="rate-item-remove" data-section="${section}" data-id="${esc(x.id)}" aria-label="Remove ${esc(x.name)}">${icon('trash')}</button></span>`
+  : x.custom ? '<span class="chip s-offered">New</span>' : '');
+const RATE_SECTIONS = {
+  jobs: ['A job artists hire each other for', 'Shows under Income: jobs. Artists hire a labelmate for it at this rate, like any other job.'],
+  payouts: ['Paid work from the label', 'Shows under Income from the label. Post it on the Job Board as a label job, or pay it from Treasury.'],
+  fines: ['A fee or fine', 'Shows under Expenses, fees & fines. Charge it from Treasury or Class mode.'],
+};
+
+/** Owners: add an item to the season's rate sheet, or change one they added. `then: 'label-job'` returns to posting a label job. */
+function rateItemModal(section = 'payouts', x = null, then = '') {
+  const t = x?.type || 'fixed';
+  modal(`${modalHead(x ? `Edit: ${esc(x.name)}` : 'Add to the rate sheet', x ? 'Changes apply to new deals, label jobs and charges. Ones already made keep their amount.' : 'Make your own item with a name and an amount. It goes on this season\'s rate sheet for everyone to see.')}
+    <form data-form="rate-item" id="rate-item-form">${x ? `<input type="hidden" name="id" value="${esc(x.id)}" />` : ''}<input type="hidden" name="then" value="${esc(then)}" />
+      ${x ? `<input type="hidden" name="section" value="${section}" />` : `<div class="field"><span>What is it?</span>${Object.entries(RATE_SECTIONS).map(([k, [l, d]]) => `<label class="check ri-section"><input type="radio" name="section" value="${k}" ${k === section ? 'checked' : ''} data-change="rate-item-section" /> <span><b>${l}</b><small class="dim">${d}</small></span></label>`).join('')}</div>`}
+      <label class="field"><span>Name</span><input name="name" required minlength="2" maxlength="60" value="${esc(x?.name || '')}" placeholder="${section === 'jobs' ? 'Video editor' : section === 'fines' ? 'Lost studio equipment' : 'Concert stage crew'}" /></label>
+      <div class="row ri-job" ${section === 'jobs' ? '' : 'hidden'}>
+        <label class="field"><span>Charged by</span><select name="unit"><option value="hour" ${x?.unit !== 'item' ? 'selected' : ''}>Hour / class block</option><option value="item" ${x?.unit === 'item' ? 'selected' : ''}>Item</option></select></label>
+        <label class="field"><span>Rate ($)</span><input name="unitRate" type="number" min="0" max="1000000" step="1" value="${x?.unitRate ?? 40}" /></label>
+        <label class="field"><span>Project rate ($, 0 = none)</span><input name="projectRate" type="number" min="0" max="1000000" step="1" value="${x?.projectRate ?? 0}" /></label>
+      </div>
+      <div class="row ri-money" ${section === 'jobs' ? 'hidden' : ''}>
+        <label class="field"><span>How it's priced</span><select name="type" data-change="rate-item-type">
+          <option value="fixed" ${t === 'fixed' ? 'selected' : ''}>A set amount</option>
+          <option value="per" ${t === 'per' ? 'selected' : ''}>An amount per something (per song, per class block…)</option>
+          <option value="min" ${t === 'min' ? 'selected' : ''}>A minimum (you pick the amount each time)</option></select></label>
+        <label class="field"><span id="ri-amt-label">${t === 'min' ? 'Minimum ($)' : 'Amount ($)'}</span><input name="amount" type="number" min="0" max="1000000" step="1" value="${x?.amount ?? 25}" /></label>
+        <label class="field" id="ri-per" ${t === 'per' ? '' : 'hidden'}><span>Per</span><input name="per" maxlength="30" value="${esc(x?.per || '')}" placeholder="class block" /></label>
+      </div>
+      <label class="field"><span>Description (optional)</span><textarea name="note" maxlength="300" placeholder="What the work is, and anything artists should know.">${esc(x?.note || '')}</textarea></label>
+      ${x ? '' : `<label class="check ri-announce" ${section === 'fines' ? 'hidden' : ''}><input type="checkbox" name="announce" value="1" checked /> Announce it in the lobby</label>`}
+      <div class="modal-foot"><button type="button" class="btn ghost" data-act="${then === 'label-job' ? 'label-job-new' : 'close-modal'}">${then === 'label-job' ? 'Back' : 'Cancel'}</button><button class="btn primary">${icon(x ? 'check' : 'plus')}${x ? 'Save' : then === 'label-job' ? 'Add, then post the job' : 'Add to rate sheet'}</button></div></form>`, { wide: true });
+}
+
 function ratesView() {
   const r = S.state.rates;
   const canHire = me() && live();
+  const canAdd = isOwner() && S.state.game.status !== 'archived';
   const jobs = r.jobs.filter((j) => j.active);
-  const jobRow = (j) => `<tr><td><b>${esc(j.name)}</b></td><td class="r num">${money(j.unitRate)}<div class="dim" style="font-size:11px">${unitLabel(j)}</div></td>
+  const jobRow = (j) => `<tr><td><b>${esc(j.name)}</b>${j.note ? `<div class="dim" style="font-size:12px">${esc(j.note)}</div>` : ''}${rateItemTools(j, 'jobs')}</td><td class="r num">${money(j.unitRate)}<div class="dim" style="font-size:11px">${unitLabel(j)}</div></td>
     <td class="r num">${j.projectRate ? money(j.projectRate) : '—'}</td>${canHire ? `<td class="r"><button class="btn sm primary" data-act="hire" data-job="${esc(j.id)}">Hire</button></td>` : ''}</tr>`;
-  return `${pageHead('The Label', 'Rate Sheet', 'Every job pays the rate on this sheet. Pick a job, pick who does it, and pay by the hour, by the item or the project rate.', canHire ? `<button class="btn primary" data-act="hire">${icon('plus')}Hire someone</button>` : '')}
+  return `${pageHead('The Label', 'Rate Sheet', 'Every job pays the rate on this sheet. Pick a job, pick who does it, and pay by the hour, by the item or the project rate.', canHire ? `<button class="btn primary" data-act="hire">${icon('plus')}Hire someone</button>` : canAdd ? `<button class="btn primary" data-act="rate-item-new">${icon('plus')}Add to rate sheet</button>` : '')}
     <div class="banner amber">${icon('shield')}<div>${r.rules.map((t) => `<p style="margin:0 0 6px">${esc(t)}</p>`).join('')}</div></div>
     ${!live() && me() ? `<div class="banner grey">${icon('lock')}<div><b>Hiring is closed</b><p>${game().status === 'setup' ? 'Deals open on Day 1, when the season starts.' : 'The season has wrapped, so no new deals can be made.'}</p></div></div>` : ''}
     <div class="grid-2" style="margin-top:0">
@@ -814,10 +850,10 @@ function ratesView() {
         <div class="card"><div class="card-head"><h3>${icon('award')}Income from the label</h3></div>
           <table class="t"><tbody>
             <tr><td><b>Advance</b><div class="dim" style="font-size:12px">All students receive an advance at the beginning of the game.</div></td><td class="r num">${money(r.advance)}</td></tr>
-            ${r.payouts.map((p) => `<tr><td><b>${esc(p.name)}</b><div class="dim" style="font-size:12px">${esc(p.note)}</div></td><td class="r num nowrap">${p.type === 'min' ? `${money(p.amount)}+` : p.type === 'per' ? `${money(p.amount)} / ${esc(p.per)}` : money(p.amount)}</td></tr>`).join('')}
+            ${r.payouts.map((p) => `<tr><td><b>${esc(p.name)}</b>${p.note ? `<div class="dim" style="font-size:12px">${esc(p.note)}</div>` : ''}${rateItemTools(p, 'payouts')}</td><td class="r num nowrap">${p.type === 'min' ? `${money(p.amount)}+` : p.type === 'per' ? `${money(p.amount)} / ${esc(p.per)}` : money(p.amount)}</td></tr>`).join('')}
           </tbody></table></div>
         <div class="card"><div class="card-head" style="background:var(--redd)"><h3>${icon('flag')}Expenses, fees & fines</h3></div>
-          <table class="t"><tbody>${r.fines.map((f) => `<tr><td><b>${esc(f.name)}</b><div class="dim" style="font-size:12px">${esc(f.note)}</div></td><td class="r num nowrap">${fineAmount(f)}</td></tr>`).join('')}</tbody></table></div>
+          <table class="t"><tbody>${r.fines.map((f) => `<tr><td><b>${esc(f.name)}</b>${f.note ? `<div class="dim" style="font-size:12px">${esc(f.note)}</div>` : ''}${rateItemTools(f, 'fines')}</td><td class="r num nowrap">${fineAmount(f)}</td></tr>`).join('')}</tbody></table></div>
       </div>
     </div>`;
 }
@@ -1241,7 +1277,8 @@ function adminView(tab) {
   } else if (t === 'rates') {
     const r = st.rates;
     const num = (name, v) => `<input class="rate-in" name="${name}" type="number" min="0" max="1000000" step="1" value="${v ?? 0}" aria-label="${name}" />`;
-    body = `<form data-form="rates-edit">
+    body = `${st.game.status !== 'archived' ? `<div class="callout" style="margin-bottom:12px">${icon('plus')}<span>Need something that isn't here? <b>Add your own item</b>: a job, paid work from the label, or a fee, with your own name and amount.</span><button type="button" class="btn sm primary" data-act="rate-item-new">${icon('plus')}Add to rate sheet</button></div>` : ''}
+    <form data-form="rates-edit">
       <div class="card"><div class="card-head"><h3>${icon('dollar')}Jobs</h3><span class="more">for ${esc(st.game.name)}</span></div>
         <p class="muted" style="margin-top:-4px">Players hire at these prices; they can't set their own. Deals already made keep the price they were made at. Untick a job to stop new hires for it.</p>
         <div class="table-wrap"><table class="t"><thead><tr><th>Job</th><th>Rate</th><th>Project rate</th><th class="r">Hireable</th></tr></thead><tbody>
@@ -1724,7 +1761,7 @@ const requestWhat = (q) => {
 
 /** Label jobs (posted by Record Owners) that still need something from an owner: picking or paying. */
 const labelJobsToPay = () => (S.state?.requests || []).filter((q) => q.kind === 'label' && (q.applicants || []).some((a) => a.status === 'picked'));
-const payoutName = (q) => S.state.rates.payouts.find((p) => p.id === q.payoutId)?.name || 'Label job';
+const payoutName = (q) => S.state.rates.payouts.find((p) => p.id === q.payoutId)?.name || (S.state.rates.retired || []).find((p) => p.id === q.payoutId)?.name || 'Label job';
 
 /** A job posted by the label: artists raise a hand; owners pick up to `spots` (or any number: "as many as possible") and pay each when the work is done. */
 function labelJobCard(q) {
@@ -1754,14 +1791,15 @@ function labelJobCard(q) {
 }
 
 /** Owners: post paid work from the rate sheet (volunteering, studio assistant...). */
-function labelJobModal() {
+function labelJobModal(selectId = null) {
   const items = S.state.rates.payouts.filter((p) => p.type !== 'auto');
-  const first = items[0];
+  const first = items.find((p) => p.id === selectId) || items[0];
   modal(`${modalHead('Post a label job', 'Paid work for the label. Artists raise a hand; you pick who does it and pay them when it\'s done.')}
     <form data-form="label-job" id="label-job-form">
-      <label class="field"><span>Job</span><select name="payoutId" data-change="label-job-calc">${items.map((p) => `<option value="${esc(p.id)}" data-type="${p.type}" data-amount="${p.amount}" data-per="${esc(p.per || '')}">${esc(p.name)} · ${p.type === 'per' ? `${money(p.amount)} per ${esc(p.per)}` : p.type === 'min' ? `${money(p.amount)} minimum` : money(p.amount)}</option>`).join('')}</select></label>
+      <label class="field"><span>Job</span><select name="payoutId" data-change="label-job-calc">${items.map((p) => `<option value="${esc(p.id)}" ${p.id === first?.id ? 'selected' : ''} data-type="${p.type}" data-amount="${p.amount}" data-per="${esc(p.per || '')}">${esc(p.name)} · ${p.type === 'per' ? `${money(p.amount)} per ${esc(p.per)}` : p.type === 'min' ? `${money(p.amount)} minimum` : money(p.amount)}</option>`).join('')}</select>
+        <small>Not on the list? <button type="button" class="linkish" data-act="rate-item-new" data-section="payouts" data-then="label-job">${icon('plus')}Add a new paid job to the rate sheet</button></small></label>
       <div class="row">
-        <label class="field" id="lj-qty" ${first?.type === 'per' ? '' : 'hidden'}><span id="lj-qty-label">Class blocks</span><input name="quantity" type="number" min="1" max="20" value="1" data-input-calc="1" /></label>
+        <label class="field" id="lj-qty" ${first?.type === 'per' ? '' : 'hidden'}><span id="lj-qty-label">${first?.type === 'per' ? esc(first.per[0].toUpperCase() + first.per.slice(1)) + 's' : 'Class blocks'}</span><input name="quantity" type="number" min="1" max="20" value="1" data-input-calc="1" /></label>
         <label class="field" id="lj-amt" ${first?.type === 'min' ? '' : 'hidden'}><span>Pay ($, at least the minimum)</span><input name="amount" type="number" min="0" max="100000" step="1" value="${first?.amount || 0}" data-input-calc="1" /></label>
         <div class="field"><span>Artists needed</span>
           <label class="check"><input type="radio" name="spotsMode" value="set" checked data-change="label-job-spots" /> A set number:
@@ -2197,6 +2235,13 @@ const ACTIONS = {
   // 2. job board
   'request-new': () => hireModal({ request: true }),
   'label-job-new': () => labelJobModal(),
+  'rate-item-new': (el) => rateItemModal(el.dataset.section || 'payouts', null, el.dataset.then || ''),
+  'rate-item-edit': (el) => rateItemModal(el.dataset.section, S.state.rates[el.dataset.section].find((x) => x.id === el.dataset.id)),
+  'rate-item-remove': (el) => {
+    const x = S.state.rates[el.dataset.section].find((y) => y.id === el.dataset.id);
+    confirmModal(`Remove "${esc(x.name)}" from the rate sheet?`, 'It can\'t be used for new deals, label jobs or charges. Ones already made keep their name and amount.', 'Remove', 'danger',
+      () => act(() => api('DELETE', `/api/games/${S.gameId}/rates/items/${encodeURIComponent(x.id)}?section=${el.dataset.section}`), 'Removed from the rate sheet'));
+  },
   'label-pick': (el) => act(() => api('POST', `/api/requests/${el.dataset.id}/pick`, { userId: Number(el.dataset.user) }), `${nameOf(Number(el.dataset.user))} picked`),
   'label-unpick': (el) => act(() => api('POST', `/api/requests/${el.dataset.id}/unpick`, { userId: Number(el.dataset.user) }), 'Removed. The spot is open again.'),
   'label-pay': (el) => {
@@ -2503,6 +2548,17 @@ const FORMS = {
   },
   charge: (d, f) => chargeItem(d, f, 'Charged'),
   payout: (d, f) => chargeItem(d, f, 'Paid'),
+  'rate-item': async (d) => {
+    const body = { section: d.section, name: d.name, note: d.note || '' };
+    if (d.section === 'jobs') Object.assign(body, { unit: d.unit, unitRate: Number(d.unitRate), projectRate: Number(d.projectRate || 0) });
+    else Object.assign(body, { type: d.type, amount: Number(d.amount), per: d.type === 'per' ? d.per : '' });
+    if (!d.id) body.announce = d.section !== 'fines' && !!d.announce;
+    const res = await act(() => (d.id ? api('PATCH', `/api/games/${S.gameId}/rates/items/${encodeURIComponent(d.id)}`, body) : api('POST', `/api/games/${S.gameId}/rates/items`, body)),
+      d.id ? 'Saved' : 'Added to the rate sheet');
+    if (!res) return;
+    if (d.then === 'label-job' && d.section === 'payouts') labelJobModal(res.id);
+    else closeModal();
+  },
   'rates-edit': (d, f) => {
     const body = { jobs: {}, payouts: {}, fines: {} };
     for (const el of f.querySelectorAll('input[name]')) {
@@ -2632,6 +2688,15 @@ document.addEventListener('change', async (e) => {
     await refresh();
   } else if (k === 'label-job-spots') {
     const f = $('#label-job-form'); if (f) f.spots.disabled = f.querySelector('input[name=spotsMode]:checked').value === 'any';
+  } else if (k === 'rate-item-section' || k === 'rate-item-type') {
+    const f = $('#rate-item-form'); if (!f) return;
+    const sec = f.querySelector('input[name=section]:checked')?.value || f.section.value;
+    f.querySelector('.ri-job').hidden = sec !== 'jobs';
+    f.querySelector('.ri-money').hidden = sec === 'jobs';
+    const ann = f.querySelector('.ri-announce'); if (ann) ann.hidden = sec === 'fines';
+    $('#ri-per').hidden = f.type.value !== 'per';
+    $('#ri-amt-label').textContent = f.type.value === 'min' ? 'Minimum ($)' : 'Amount ($)';
+    f.querySelector('input[name=name]').placeholder = sec === 'jobs' ? 'Video editor' : sec === 'fines' ? 'Lost studio equipment' : 'Concert stage crew';
   } else if (k === 'cal-kind') {
     const t = $('#cal-time'); if (t) t.hidden = el.value === 'noschool';
   } else if (k === 'label-job-calc') {

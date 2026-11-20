@@ -76,13 +76,23 @@ function parseOverrides(raw) {
   try { const o = JSON.parse(raw || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; }
 }
 
-/** The season's rate sheet: the defaults with any owner changes applied. */
+// Items Record Owners add themselves (stored per season in games.rate_sheet under `custom`).
+// Removed ones stay stored (marked removed) so old deals and payments keep their names.
+const SECTIONS = ['jobs', 'payouts', 'fines'];
+const MAX_CUSTOM = 40;
+const customOf = (o) => Object.fromEntries(SECTIONS.map((k) => [k, Array.isArray(o.custom?.[k]) ? o.custom[k] : []]));
+
+/** The season's rate sheet: the defaults plus owner-added items, with any owner changes applied. */
 function sheetFor(game) {
   const o = parseOverrides(game.rate_sheet);
-  const jobs = clone(JOBS).map((j) => ({ active: true, ...j, ...(o.jobs?.[j.id] || {}) }));
-  const payouts = clone(PAYOUTS).map((p) => ({ ...p, ...(o.payouts?.[p.id] || {}) }));
-  const fines = clone(FINES).map((f) => ({ ...f, ...(o.fines?.[f.id] || {}) }));
-  return { rules: RULES, advance: game.starting_balance, jobs, payouts, fines };
+  const c = customOf(o);
+  const live = (list) => list.filter((x) => !x.removed);
+  const jobs = [...clone(JOBS), ...clone(live(c.jobs))].map((j) => ({ active: true, ...j, ...(o.jobs?.[j.id] || {}) }));
+  const payouts = [...clone(PAYOUTS), ...clone(live(c.payouts))].map((p) => ({ ...p, ...(o.payouts?.[p.id] || {}) }));
+  const fines = [...clone(FINES), ...clone(live(c.fines))].map((f) => ({ ...f, ...(o.fines?.[f.id] || {}) }));
+  // Names of removed items, so old deals, label jobs and payments still show what they were.
+  const retired = SECTIONS.flatMap((k) => c[k].filter((x) => x.removed).map((x) => ({ id: x.id, name: x.name, section: k })));
+  return { rules: RULES, advance: game.starting_balance, jobs, payouts, fines, retired };
 }
 
 const findItem = (list, id) => list.find((x) => x.id === id);
@@ -91,15 +101,18 @@ const findItem = (list, id) => list.find((x) => x.id === id);
  * Validate an owner's edit and return the overrides JSON to store. Only amounts
  * (and whether a job can be hired) are editable; names and notes come from the sheet.
  */
-function overridesFrom(body, fail) {
+function overridesFrom(body, fail, game = {}) {
+  const cur = parseOverrides(game.rate_sheet);
+  const c = customOf(cur);
+  const all = (base, list) => [...base, ...list.filter((x) => !x.removed)];
   const amount = (v, label) => {
     const n = Number(v);
     if (!Number.isInteger(n) || n < 0 || n > MAX_RATE) fail(`${label} must be a whole number of dollars from 0 to ${MAX_RATE.toLocaleString()}`);
     return n;
   };
-  const out = { jobs: {}, payouts: {}, fines: {} };
+  const out = { jobs: {}, payouts: {}, fines: {}, custom: c };
   for (const [id, v] of Object.entries(body.jobs || {})) {
-    const j = findItem(JOBS, id);
+    const j = findItem(all(JOBS, c.jobs), id);
     if (!j) fail(`Unknown job: ${id}`);
     out.jobs[id] = {
       unitRate: amount(v.unitRate ?? j.unitRate, `${j.name} rate`),
@@ -108,12 +121,12 @@ function overridesFrom(body, fail) {
     };
   }
   for (const [id, v] of Object.entries(body.payouts || {})) {
-    const p = findItem(PAYOUTS, id);
+    const p = findItem(all(PAYOUTS, c.payouts), id);
     if (!p) fail(`Unknown payout: ${id}`);
     out.payouts[id] = { amount: amount(v.amount ?? p.amount, p.name) };
   }
   for (const [id, v] of Object.entries(body.fines || {})) {
-    const f = findItem(FINES, id);
+    const f = findItem(all(FINES, c.fines), id);
     if (!f) fail(`Unknown fee or fine: ${id}`);
     if (f.type === 'percent') continue;
     out.fines[id] = { amount: amount(v.amount ?? f.amount, f.name) };
@@ -121,4 +134,67 @@ function overridesFrom(body, fail) {
   return JSON.stringify(out);
 }
 
-module.exports = { sheetFor, overridesFrom, findItem };
+/**
+ * Add, change or remove an owner-made item. Returns { json, item } (json: the new games.rate_sheet).
+ *   jobs:    { name, unit: 'hour' | 'item', unitRate, projectRate, note }
+ *   payouts: { name, type: 'fixed' | 'per' | 'min', amount, per, note }   (money the label pays)
+ *   fines:   { name, type: 'fixed' | 'per' | 'min', amount, per, note }   (fees and fines)
+ * Amounts already set on the sheet are kept in sync: an edit here replaces any override for the item.
+ */
+function customItem(game, section, body, fail, { id = null, remove = false } = {}) {
+  if (!SECTIONS.includes(section)) fail('Pick where it goes: a job, label pay, or a fee or fine');
+  const o = parseOverrides(game.rate_sheet);
+  const c = customOf(o);
+  const list = c[section];
+  const cur = id ? list.find((x) => x.id === id && !x.removed) : null;
+  if (id && !cur) fail('That item is not on the rate sheet (only items you added can be changed here)', 404);
+  if (remove) {
+    cur.removed = true;
+    for (const k of SECTIONS) if (o[k]) delete o[k][cur.id];
+    return { json: JSON.stringify({ ...o, custom: c }), item: cur };
+  }
+  const text = (v, label, { min = 0, max }) => {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim();
+    if (t.length < min) fail(min > 1 ? `${label} needs at least ${min} characters` : `${label} is required`);
+    if (t.length > max) fail(`${label} can be at most ${max} characters`);
+    return t;
+  };
+  const money = (v, label, { min = 0 } = {}) => {
+    const n = Number(v);
+    if (v === '' || v == null || !Number.isInteger(n) || n < min || n > MAX_RATE) fail(`${label} must be a whole number of dollars from ${min} to ${MAX_RATE.toLocaleString()}`);
+    return n;
+  };
+  const b = { ...(cur || {}), ...body };
+  const name = text(b.name, 'Name', { min: 2, max: 60 });
+  const defaults = { jobs: JOBS, payouts: PAYOUTS, fines: FINES }[section];
+  const clash = [...defaults, ...list.filter((x) => !x.removed && x.id !== cur?.id)].find((x) => x.name.toLowerCase() === name.toLowerCase());
+  if (clash) fail(`"${clash.name}" is already on the rate sheet`);
+  const note = text(b.note, 'Description', { max: 300 });
+  let item;
+  if (section === 'jobs') {
+    const unit = b.unit === 'item' ? 'item' : 'hour';
+    const unitRate = money(b.unitRate, unit === 'item' ? 'Rate per item' : 'Rate per hour / class');
+    const projectRate = money(b.projectRate ?? 0, 'Project rate');
+    if (!unitRate && !projectRate) fail('Set a rate, a project rate, or both');
+    item = { name, unit, unitRate, projectRate, note };
+  } else {
+    const type = ['fixed', 'per', 'min'].includes(b.type) ? b.type : 'fixed';
+    const amount = money(b.amount, type === 'min' ? 'Minimum amount' : 'Amount', { min: section === 'payouts' && type !== 'min' ? 1 : 0 });
+    const per = type === 'per' ? text(b.per, 'What it is "per" (like song, item, class block)', { min: 2, max: 30 }).toLowerCase() : undefined;
+    item = { name, type, amount, ...(per ? { per } : {}), note };
+  }
+  if (cur) {
+    Object.assign(cur, item);
+    if (section !== 'jobs' && !item.per) delete cur.per;
+    if (o[section]) delete o[section][cur.id]; // the amounts set here win over earlier edits
+    return { json: JSON.stringify({ ...o, custom: c }), item: cur };
+  }
+  if (list.filter((x) => !x.removed).length >= MAX_CUSTOM) fail(`Up to ${MAX_CUSTOM} added items per section`);
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'item';
+  const newId = `custom-${slug}-${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  const made = { id: newId, ...item, custom: true };
+  list.push(made);
+  return { json: JSON.stringify({ ...o, custom: c }), item: made };
+}
+
+module.exports = { sheetFor, overridesFrom, findItem, customItem, SECTIONS };

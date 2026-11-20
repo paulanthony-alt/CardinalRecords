@@ -877,3 +877,13 @@ input[type=time] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; b
   .cal-title { width: 100%; margin: 4px 0 0; }
 }
 .cal-foot { margin: 10px 0 0; font-size: 12.5px; }
+
+/* ---------- owner-added rate sheet items ---------- */
+.ri-tools { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; vertical-align: middle; flex-wrap: wrap; }
+.ri-tools .btn { min-height: 22px; padding: 0 6px; }
+.ri-section { align-items: flex-start; margin: 4px 0; }
+.ri-section span { display: flex; flex-direction: column; }
+.ri-section small { font-size: 12px; font-weight: 400; }
+button.linkish { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--red); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+button.linkish .i { width: 13px; height: 13px; }
+.callout .btn { margin-left: auto; flex: none; }
