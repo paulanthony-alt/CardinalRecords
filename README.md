@@ -96,6 +96,17 @@ Owners can post **label jobs** on the Job Board with **Post a label job**, using
 
 Artists raise a hand with an optional note. Owners **Pick** up to the number of spots (and can **Remove** a pick, which reopens the spot), then **Pay** each artist when the work is done. Payments are announced in the lobby, show in the ledger and can be undone. The admin bar shows **Label jobs to pay**. Students see the count of hands and who was picked, plus their own status (Picked, then Paid).
 
+Need a job that isn't on the sheet? **Add a new paid job to the rate sheet** right from the Post a label job form: name it, give it an amount, and you're back on the form with it picked (see below).
+
+## Adding your own items to the rate sheet (owners)
+
+Owners can add their own items to a season's rate sheet with **Add to rate sheet** (on the Rate Sheet page, in Admin -> Rate sheet, or from Post a label job). Pick what it is:
+- **A job artists hire each other for**: charged by the hour/class block or by the item, with a rate and an optional project rate. Artists hire for it like any other job.
+- **Paid work from the label**: a set amount, an amount per something (per class block, per song...), or a minimum where the owner sets the pay each time. Post it as a label job on the Job Board, or pay it from Treasury.
+- **A fee or fine**: a set amount, per something, or a minimum. Charge it from Treasury.
+
+Each item has a name (no duplicates on the sheet) and an optional description. New jobs and label pay are announced in the lobby (can be turned off); fees aren't. Added items are marked **Added** on the Rate Sheet with **Edit** and **Remove**. Their amounts can also be changed with the rest of the sheet in Admin -> Rate sheet. Changes apply to new deals, label jobs and charges; ones already made keep their amount. **Remove** takes an item off the sheet for new use, but old deals, label jobs and payments keep its name, and a label job already posted can still be paid. Added items belong to one season, and are in the data download and backups.
+
 ## Deal deadlines
 
 A deal's "due in X days" counts **school days**: weekends don't count. It starts the day the label approves the deal, and work is due by the end of the Xth weekday (11:59 PM school time). Approved Friday with 1 day is due at the end of Monday; approved on a weekend, counting starts Monday. School time is `America/New_York`, which can be changed with the `SCHOOL_TZ` environment variable. **No-school days** on the Calendar are skipped too. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).

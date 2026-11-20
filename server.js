@@ -503,7 +503,8 @@ app.post('/api/games/:gameId/charges', auth, ownerOnly, async (req, res) => {
 // Owners change the season's rate sheet amounts. Deals already made keep their price.
 app.put('/api/games/:gameId/rates', auth, ownerOnly, async (req, res) => {
   const game = await gameFor(req);
-  const overrides = R.overridesFrom(req.body || {}, fail);
+  if (game.status === 'archived') fail('This season is archived');
+  const overrides = R.overridesFrom(req.body || {}, fail, game);
   await db.run('UPDATE games SET rate_sheet = ? WHERE id = ?', overrides, game.id);
   res.json({ ok: true, rates: R.sheetFor({ ...game, rate_sheet: overrides }) });
 });
@@ -1007,6 +1008,44 @@ app.post('/api/requests/:requestId/hire', auth, async (req, res) => {
   res.json({ ok: true, contractId });
 });
 
+// Owners add their own items to the season's rate sheet: a job artists hire each other for,
+// paid work from the label (to post as a label job), or a fee or fine.
+app.post('/api/games/:gameId/rates/items', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const section = String(req.body?.section || '');
+  const { json, item } = R.customItem(game, section, req.body || {}, fail);
+  await db.run('UPDATE games SET rate_sheet = ? WHERE id = ?', json, game.id);
+  if (req.body?.announce !== false && section !== 'fines') {
+    const sheet = R.sheetFor({ ...game, rate_sheet: json });
+    const x = R.findItem(sheet[section], item.id);
+    const price = section === 'jobs'
+      ? [x.unitRate ? `${G.fmt$(x.unitRate)} per ${x.unit === 'item' ? 'item' : 'hour'}` : '', x.projectRate ? `${G.fmt$(x.projectRate)} per project` : ''].filter(Boolean).join(' or ')
+      : `${G.fmt$(x.amount)}${x.type === 'per' ? ` per ${x.per}` : x.type === 'min' ? ' or more' : ''}`;
+    await G.post(game.id, 'announcement', req.user.id, section === 'jobs'
+      ? `New on the rate sheet: ${x.name}, ${price}. You can hire for it now.`
+      : `New on the rate sheet: ${x.name} (the label pays ${price}).`);
+  }
+  res.json({ ok: true, id: item.id });
+});
+
+app.patch('/api/games/:gameId/rates/items/:itemId', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const { json } = R.customItem(game, String(req.body?.section || ''), req.body || {}, fail, { id: String(req.params.itemId) });
+  await db.run('UPDATE games SET rate_sheet = ? WHERE id = ?', json, game.id);
+  res.json({ ok: true });
+});
+
+// Removing keeps the name for old deals and payments; it just can't be used for new ones.
+app.delete('/api/games/:gameId/rates/items/:itemId', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (game.status === 'archived') fail('This season is archived');
+  const { json } = R.customItem(game, String(req.query.section || ''), {}, fail, { id: String(req.params.itemId), remove: true });
+  await db.run('UPDATE games SET rate_sheet = ? WHERE id = ?', json, game.id);
+  res.json({ ok: true });
+});
+
 // ---------- label jobs (owners post paid work from the rate sheet) ----------
 // Volunteering in other classes and studio assistant work: owners post it, artists raise a
 // hand, owners pick up to `spots` artists (or as many as they like when spots is null:
@@ -1073,7 +1112,8 @@ app.post('/api/requests/:requestId/pay', auth, ownerOnly, async (req, res) => {
   const { q, game } = await labelJobFor(req);
   if (game.status === 'archived') fail('This season is archived');
   const uid = int(req.body?.userId, 'Artist');
-  const item = R.findItem(R.sheetFor(game).payouts, q.payout_id);
+  const sheetNow = R.sheetFor(game);
+  const item = R.findItem(sheetNow.payouts, q.payout_id) || sheetNow.retired.find((x) => x.id === q.payout_id);
   await tx(async () => {
     const a = await db.get('SELECT status FROM job_applicants WHERE request_id = ? AND user_id = ?', q.id, uid);
     if (!a || a.status !== 'picked') fail(a?.status === 'paid' ? 'Already paid' : 'Pick the artist first');
