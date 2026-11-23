@@ -49,6 +49,7 @@ fresh cr_studio; start cr_studio "tester:0000:Tester" && PGURL="postgres://postg
 fresh cr_lj; start cr_lj "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_lj" node "$T/label-jobs.test.js" "$OUT" > "$OUT/labeljobs.txt" 2>&1; stop; record "Label jobs (owners post paid work)" "$OUT/labeljobs.txt"
 fresh cr_cal; start cr_cal "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_cal" node "$T/calendar.test.js" "$OUT" > "$OUT/calendar.txt" 2>&1; stop; record "Label calendar (dates, no-school days, due dates)" "$OUT/calendar.txt"
 fresh cr_ri; start cr_ri "tester:0000:Tester" && node "$T/rate-items.test.js" "$OUT" > "$OUT/rateitems.txt" 2>&1; stop; record "Owner-added rate sheet items" "$OUT/rateitems.txt"
+fresh cr_rm; start cr_rm "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_rm" node "$T/reminders.test.js" "$OUT" > "$OUT/reminders.txt" 2>&1; stop; record "Reminders (close out deals, finish your job)" "$OUT/reminders.txt"
 fresh cr_class; start cr_class "$OWN" && node "$T/classroom.test.js" "$OUT" > "$OUT/class.txt" 2>&1; record "Classroom flows (30 students)" "$OUT/class.txt"
 if [ $HAVE_UI = 1 ]; then node "$T/every-page.ui.js" "$OUT" 2>&1 | grep -v "401 (Unauthorized)" > "$OUT/pages.txt"; [ -s "$OUT/pages.txt" ] || echo "no problems" > "$OUT/pages.txt"; record "Every page, student + owner, phone + laptop" "$OUT/pages.txt" "no problems"; fi
 node "$T/drift.js" save "$OUT" >/dev/null 2>&1; stop; start cr_class "$OWN"; node "$T/drift.js" compare "$OUT" > "$OUT/drift.txt" 2>&1; record "Shared cache matches the database" "$OUT/drift.txt" "PASS cached"
@@ -69,6 +70,7 @@ if [ $HAVE_UI = 1 ]; then
   fresh cr_ljui; start cr_ljui "tester:0000:Tester" && node "$T/label-jobs.ui.js" "$OUT" > "$OUT/ljui.txt" 2>&1; stop; record "Label jobs in the browser" "$OUT/ljui.txt"
   fresh cr_calui; start cr_calui "tester:0000:Tester" && node "$T/calendar.ui.js" "$OUT" > "$OUT/calui.txt" 2>&1; stop; record "Label calendar in the browser (month, week, phone)" "$OUT/calui.txt"
   fresh cr_riui; start cr_riui "tester:0000:Tester" && node "$T/rate-items.ui.js" "$OUT" > "$OUT/riui.txt" 2>&1; stop; record "Owner-added rate sheet items in the browser" "$OUT/riui.txt"
+  fresh cr_rmui; start cr_rmui "tester:0000:Tester" && PGURL="postgres://postgres@localhost:$PORT_PG/cr_rmui" node "$T/reminders.ui.js" "$OUT" > "$OUT/rmui.txt" 2>&1; stop; record "Close out deals and reminders in the browser" "$OUT/rmui.txt"
   fresh cr_sync; start cr_sync "$OWN" && node "$T/sync-owners.ui.js" "$OUT" > "$OUT/sync.txt" 2>&1; stop; record "Change check and two-owner sync" "$OUT/sync.txt"
 else echo "SKIP  Browser suites (Playwright not available)" >> "$SUMMARY"; fi
 n=$(grep -ciE "error|unhandled" "$OUT/server.log" 2>/dev/null); echo "INFO  Server log errors: ${n:-0}" >> "$SUMMARY"

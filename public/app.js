@@ -63,6 +63,7 @@ const ICONS = {
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
 };
 const icon = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
@@ -310,6 +311,130 @@ function contractCard(c) {
   </div>`;
 }
 
+
+// ============================================================ reminders
+const DAY_MS = 86_400_000;
+const STUCK_DAYS = 2; // a delivered deal not confirmed, or an offer not signed, after this many days needs closing out
+const firstName = (id) => nameOf(id).split(' ')[0];
+const daysAgo = (ms) => Math.floor((Date.now() - ms) / DAY_MS);
+const agoDays = (ms) => { const d = daysAgo(ms); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
+/** When a deal got to its current step: the latest event, or its last update. */
+const sinceOf = (c) => Math.max(c.updatedAt || 0, ...(c.events || []).map((e) => e.at || 0));
+/** The last reminder sent about a deal (owners see them all). */
+const lastReminder = (c) => (S.state?.reminders || []).filter((r) => r.contractId === c.id).sort((a, b) => b.at - a.at)[0];
+
+/**
+ * Owners: deals that need closing out, in groups. Each row says who it's waiting on.
+ * Once the season has ended, every deal still open is listed.
+ */
+function closeOutGroups() {
+  const st = S.state; if (!st) return [];
+  const ended = ['showcase', 'archived'].includes(st.game.status);
+  const now = Date.now();
+  const used = new Set();
+  const take = (list) => list.filter((c) => !used.has(c.id) && used.add(c.id));
+  const open = st.contracts.filter((c) => ['offered', 'countered', 'active', 'delivered'].includes(c.status));
+  const groups = [
+    { key: 'overdue', title: 'Overdue: the work is late', icon: 'flag', who: 'seller',
+      help: 'Past the due date and not delivered. Remind the artist, or open the deal to charge the late fee, mark the work not done, or void it.',
+      list: take(open.filter((c) => c.status === 'active' && c.overdue)),
+      why: (c) => `Was due ${new Date(c.dueAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}. Waiting on ${esc(firstName(c.sellerId))} to deliver.` },
+    { key: 'confirm', title: 'Delivered, not confirmed', icon: 'check', who: 'buyer',
+      help: `Delivered ${STUCK_DAYS}+ days ago and the client hasn't confirmed. Remind them, or <b>Pay out</b> if the work is done.`,
+      list: take(open.filter((c) => c.status === 'delivered' && (ended || now - sinceOf(c) >= STUCK_DAYS * DAY_MS))),
+      why: (c) => `${esc(firstName(c.sellerId))} delivered ${agoDays(sinceOf(c))}. Waiting on ${esc(firstName(c.buyerId))} to confirm & pay.` },
+    { key: 'unsigned', title: 'Offers nobody signed', icon: 'file', who: 'seller',
+      help: `Offered ${STUCK_DAYS}+ days ago and still not signed. Remind the artist, or <b>Void</b> it to refund the client.`,
+      list: take(open.filter((c) => c.status === 'offered' && (ended || now - sinceOf(c) >= STUCK_DAYS * DAY_MS))),
+      why: (c) => `${esc(firstName(c.buyerId))} offered it ${agoDays(sinceOf(c))}. Waiting on ${esc(firstName(c.sellerId))} to sign or decline.` },
+  ];
+  if (ended) {
+    groups.push({ key: 'ended', title: 'Still open after the season ended', icon: 'lock', who: 'seller',
+      help: 'The season is over, so finish these: pay out work that was done, or void the rest to refund the client.',
+      list: take(open), why: (c) => `${STATUS[c.status]}.${c.status === 'active' ? ` Waiting on ${esc(firstName(c.sellerId))} to deliver.` : ''}` });
+  }
+  return groups.filter((g) => g.list.length);
+}
+const closeOutCount = () => closeOutGroups().reduce((a, g) => a + g.list.length, 0);
+/** Who a reminder about this deal goes to (the server decides the same way). */
+const remindWho = (c) => ({ offered: c.sellerId, active: c.sellerId, delivered: c.buyerId })[c.status] ?? null;
+
+function closeOutRow(c, g) {
+  const who = remindWho(c);
+  const last = lastReminder(c);
+  const canRemind = who != null && ['active', 'showcase'].includes(S.state.game.status);
+  const fix = c.status === 'delivered' ? ['complete', 'Pay out', 'green'] : c.status === 'active' ? null : ['cancel', 'Void & refund', 'danger'];
+  return `<div class="co-row">
+    <div class="co-main"><a href="#/contract/${c.id}"><b>${esc(c.title)}</b></a> <span class="c-no mono">${cno(c.id)}</span> <span class="chip s-${c.status}">${STATUS[c.status]}</span>
+      <div class="sub">${esc(nameOf(c.buyerId))} hired ${esc(nameOf(c.sellerId))} · ${money(c.amount)}</div>
+      <div class="co-why">${g.why(c)}</div>
+      ${last ? `<div class="co-last">${icon('clock')}Reminded ${esc(firstName(last.userId))} ${ago(last.at)}${last.seenAt ? ' · seen' : ''}</div>` : ''}</div>
+    <div class="c-actions">${canRemind ? `<button class="btn sm primary" data-act="remind" data-ids="${c.id}">${icon('bell')}Remind ${esc(firstName(who))}</button>` : ''}
+      ${fix ? `<button class="btn sm ${fix[2]}" data-act="contract" data-id="${c.id}" data-a="${fix[0]}">${fix[1]}</button>` : ''}
+      <a class="btn sm" href="#/contract/${c.id}">Open</a></div></div>`;
+}
+
+function closeOutView() {
+  const groups = closeOutGroups();
+  const live = ['active', 'showcase'].includes(S.state.game.status);
+  const all = groups.flatMap((g) => g.list).filter((c) => remindWho(c) != null);
+  const review = S.state.contracts.filter((c) => c.status === 'review').length;
+  return `<div class="card"><div class="card-head"><h3>${icon('check')}Close out deals</h3><span class="more">${plural(closeOutCount(), 'deal')}</span></div>
+      <p class="muted" style="margin-top:-4px">Deals that are stuck: late work, deliveries nobody confirmed, and offers nobody signed. <b>Remind</b> sends the artist a note they see on every page until they tap <i>Got it</i>. Artists also get automatic reminders when their work is due today, tomorrow or overdue.</p>
+      ${review ? `<div class="note">${icon('shield')}${plural(review, 'deal')} waiting for your approval in the <a href="#/admin/review">Review queue</a>.</div>` : ''}
+      ${all.length && live ? `<div><button class="btn primary" data-act="remind-all" data-ids="${all.map((c) => c.id).join(',')}">${icon('bell')}Remind everyone (${all.length})</button></div>` : ''}
+      ${groups.length ? '' : empty('check', 'Nothing to close out', 'Every open deal is on track.')}</div>
+    ${groups.map((g) => `<div class="card co-group co-${g.key}"><div class="card-head"><h3>${icon(g.icon)}${g.title}</h3><span class="more">${g.list.length}</span></div>
+      <p class="muted" style="margin-top:-4px">${g.help}</p>
+      ${live && g.list.some((c) => remindWho(c) != null) && g.list.length > 1 ? `<div><button class="btn sm" data-act="remind-all" data-ids="${g.list.filter((c) => remindWho(c) != null).map((c) => c.id).join(',')}" style="margin-bottom:8px">${icon('bell')}Remind all ${g.list.length}</button></div>` : ''}
+      <div class="co-list">${g.list.map((c) => closeOutRow(c, g)).join('')}</div></div>`).join('')}`;
+}
+
+/**
+ * Artists: what they need to do on their deals, worked out live (due today/tomorrow/overdue,
+ * offers to sign, deliveries to confirm), plus reminders a teacher sent that they haven't dismissed.
+ */
+function artistReminders() {
+  const st = S.state; const m = me(); if (!st || !m) return { sent: [], auto: [] };
+  const sent = (st.reminders || []).filter((r) => r.userId === m.id && !r.seenAt).sort((a, b) => b.at - a.at);
+  const auto = [];
+  const today = new Date().toDateString(); const tomorrow = new Date(Date.now() + DAY_MS).toDateString();
+  for (const c of st.contracts) {
+    if (c.sellerId === m.id && c.status === 'active' && c.dueAt) {
+      const due = new Date(c.dueAt).toDateString();
+      if (c.overdue) auto.push({ level: 'over', c, text: `<b>Overdue:</b> finish "${esc(c.title)}" for ${esc(nameOf(c.buyerId))} and mark it delivered. Late work can be charged the late fee.` });
+      else if (due === today) auto.push({ level: 'over', c, text: `<b>Due today:</b> finish "${esc(c.title)}" for ${esc(nameOf(c.buyerId))} and mark it delivered.` });
+      else if (due === tomorrow) auto.push({ level: 'soon', c, text: `<b>Due tomorrow:</b> "${esc(c.title)}" for ${esc(nameOf(c.buyerId))}.` });
+    }
+    if (c.buyerId === m.id && c.status === 'delivered') auto.push({ level: 'soon', c, text: `<b>${esc(nameOf(c.sellerId))} delivered</b> "${esc(c.title)}". Check it, then confirm & pay.` });
+    if (c.sellerId === m.id && c.status === 'offered' && live()) auto.push({ level: 'soon', c, text: `<b>${esc(nameOf(c.buyerId))} wants to hire you</b> for "${esc(c.title)}". Sign or decline.` });
+  }
+  auto.sort((a, b) => (a.level === 'over' ? 0 : 1) - (b.level === 'over' ? 0 : 1));
+  // Teacher reminders about a deal already listed above replace the automatic line for it.
+  const sentFor = new Set(sent.map((r) => r.contractId));
+  return { sent, auto: auto.filter((x) => !sentFor.has(x.c.id)) };
+}
+const hideKey = () => `cr.remind.hide.${S.gameId}`;
+const todayKey = () => new Date().toDateString();
+
+/** The reminder box at the top of every page for artists. */
+function remindersStrip(route) {
+  if (isOwner() || !me()) return '';
+  const { sent, auto } = artistReminders();
+  const hidden = store.get(hideKey()) === todayKey();
+  const urgent = auto.filter((x) => x.level === 'over');
+  // Hidden for today: teacher reminders and overdue/due-today work still show.
+  const autoShown = hidden ? urgent : auto;
+  if (!sent.length && !autoShown.length) return '';
+  const row = (x) => `<li class="rm-${x.level}">${icon(x.level === 'over' ? 'flag' : 'clock')}<span>${x.text}</span>${route === 'contract' && currentRoute()[1] === String(x.c.id) ? '' : `<a class="btn sm" href="#/contract/${x.c.id}">Open</a>`}</li>`;
+  return `<div class="reminders win" role="status" aria-label="Reminders">
+    <div class="rm-head">${icon('bell')}<b>Reminders</b>${auto.length && !hidden ? `<button class="btn sm ghost" data-act="remind-hide">Hide for today</button>` : ''}</div>
+    <ul>${sent.map((r) => `<li class="rm-teacher">${icon('shield')}<span><b>From ${esc(nameOf(r.by))}:</b> ${esc(r.message)} <small class="dim">${ago(r.at)}</small></span>
+        ${r.contractId ? `<a class="btn sm" href="#/contract/${r.contractId}">Open</a>` : ''}<button class="btn sm primary" data-act="remind-seen" data-id="${r.id}">Got it</button></li>`).join('')}
+      ${autoShown.slice(0, 5).map(row).join('')}
+      ${autoShown.length > 5 ? `<li class="rm-more"><a href="#/contracts">+ ${autoShown.length - 5} more in Contracts</a></li>` : ''}</ul></div>`;
+}
+
 // ============================================================ login
 // ============================================================ privacy
 // Keep this in step with what the server actually stores (see README: Privacy).
@@ -480,7 +605,7 @@ function taskAction() {
 const clockText = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
 const ADMIN_TABS = [
-  ['review', 'Review queue', 'shield'], ['class', 'Class mode', 'zap'], ['lobby', 'Lobby controls', 'message'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
+  ['review', 'Review queue', 'shield'], ['closeout', 'Close out deals', 'check'], ['class', 'Class mode', 'zap'], ['lobby', 'Lobby controls', 'message'], ['roster', 'Roster & PINs', 'users'], ['treasury', 'Treasury & fines', 'dollar'],
   ['rates', 'Rate sheet', 'file'], ['season', 'Season settings', 'clock'], ['seasons', 'All seasons', 'flag'],
   ['backups', 'Backups & offload', 'download'], ['new', 'New season', 'plus'],
 ];
@@ -516,7 +641,7 @@ function adminBar(route) {
     ${g.status !== 'archived' ? `<button class="ab-ctl ab-toggle ${uploadsOpen() ? 'on' : ''}" data-act="uploads" data-open="${uploadsOpen() ? 0 : 1}" title="Music sharing">${icon('music')}Music ${uploadsOpen() ? 'open' : 'closed'}</button>` : ''}
     <button class="ab-ctl ab-toggle ${g.guide_open ? 'on' : ''}" data-act="guide-toggle" data-open="${g.guide_open ? 0 : 1}" title="Release Guide for students">${icon('map')}Guide ${g.guide_open ? 'open' : 'hidden'}</button>
     ${item('#/admin/review', 'Review', review, review > 0)}
-    ${overdueDeals().length ? item('#/admin/review', 'Overdue', overdueDeals().length, true) : ''}
+    ${closeOutCount() ? item('#/admin/closeout', 'Close out', closeOutCount(), true) : ''}
     ${challengesToJudge().length ? item('#/challenges', 'To judge', challengesToJudge().length, true) : ''}
     ${studioPending().length ? item('#/studio', 'Studio requests', studioPending().length, true) : ''}
     ${labelJobsToPay().length ? item('#/jobs', 'Label jobs to pay', labelJobsToPay().length, true) : ''}
@@ -558,7 +683,7 @@ function shellView(view) {
         <button class="mi" data-act="logout">Sign out</button></div>
     </header>
     ${adminBar(route)}
-    <section class="view" id="view">${u.startingPin && route !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
+    <section class="view" id="view">${remindersStrip(route)}${u.startingPin && route !== 'profile' ? `<div class="banner red">${icon('key')}<div><b>You're still using your starting PIN</b><p>Pick a new one so nobody else can sign in as you.</p></div><div class="actions"><a class="btn" href="#/profile">Change PIN</a></div></div>` : ''}${view}</section>
     <footer class="taskbar raised">
       <a class="btn start" href="#/hq">${bird(16)}Cardinal</a>
       <div class="tasks">${wells.join('')}</div>
@@ -577,6 +702,7 @@ function phaseBanner() {
   if (!g) return '';
   if (g.status === 'setup') return `<div class="banner amber">${icon('clock')}<div><b>Pre-season</b><p>The Record Owner hasn't started the clock yet. ${m ? 'Read the rate sheet now so you know what every job pays on Day 1.' : 'Sign your artists, then start the season from Admin → Season settings.'}</p></div>
     <div class="actions">${m ? '<a class="btn" href="#/rates">Rate sheet</a>' : '<a class="btn primary" href="#/admin/season">Season settings</a>'}</div></div>`;
+  if (!m && g.status === 'showcase' && closeOutCount()) return `<div class="banner red">${icon('check')}<div><b>Close out the season's deals</b><p>${plural(closeOutCount(), 'deal')} still open. Pay out finished work and void the rest.</p></div><div class="actions"><a class="btn primary" href="#/admin/closeout">Close out deals</a></div></div>`;
   if (g.status === 'active' && uploadsOpen()) return `<div class="banner purple">${icon('upload')}<div><b>Music sharing is open</b><p>${m ? 'A Record Owner opened music sharing early. Share a link to your tracks in the Showcase whenever they are ready.' : 'Artists can share links to their music in the Showcase now.'}</p></div>
     <div class="actions">${m ? '<button class="btn primary" data-act="upload">Share your music</button>' : uploadToggle()}<a class="btn" href="#/showcase">Showcase</a></div></div>`;
   if (g.status === 'active' && g.clock.daysLeft <= 7) return `<div class="banner red">${icon('flag')}<div><b>Final stretch: ${plural(g.clock.daysLeft, 'day')} left</b><p>Wrap up your deals and finish your music. The Showcase opens when the season ends.</p></div></div>`;
@@ -1213,6 +1339,8 @@ function adminView(tab) {
       <a class="btn primary" href="#/admin/new" style="margin-top:12px">${icon('plus')}New season</a></div>`;
   } else if (t === 'backups') {
     body = backupsView();
+  } else if (t === 'closeout') {
+    body = closeOutView();
   } else if (t === 'class') {
     body = classModeView();
   } else if (t === 'lobby') {
@@ -1375,7 +1503,7 @@ function classModeView() {
         <div class="cr-btns">${BTN.map(([id, it, label, cls]) => `<button class="btn sm ${cls}" data-act="class-tap" data-id="${p.id}" data-item="${id}" title="${esc(it.name)}">${label} <span class="mono">${it.type === 'percent' ? '' : `${cls === 'danger' ? '−' : '+'}${money(it.amount)}`}</span></button>`).join('')}</div>
         <div class="cr-today">${t.map((l) => `<span class="today-chip ${l.undone ? 'undone' : ''}">${esc(l.memo.split(':')[0])} <b class="${l.amount < 0 ? 'amt-neg' : 'amt-pos'}">${l.amount < 0 ? '−' : '+'}${money(Math.abs(l.amount))}</b>${l.undone ? ' · undone' : ` <button class="link-x" data-act="undo" data-id="${l.id}" data-quick="1" aria-label="Undo">Undo</button>`}</span>`).join('')}</div></div>`;
     }).join('')}</div>` : empty('users', 'No artists yet')}
-    <p class="dim" style="font-size:12.5px;margin-top:10px">Other fees, custom amounts and charging several students at once are in <a href="#/admin/treasury">Treasury &amp; fines</a>. Overdue deals: ${overdueDeals().length ? `<a href="#/admin/review">${plural(overdueDeals().length, 'deal')}</a>` : 'none'}.</p></div>`;
+    <p class="dim" style="font-size:12.5px;margin-top:10px">Other fees, custom amounts and charging several students at once are in <a href="#/admin/treasury">Treasury &amp; fines</a>. Overdue deals: ${overdueDeals().length ? `<a href="#/admin/closeout">${plural(overdueDeals().length, 'deal')}</a>` : 'none'}.</p></div>`;
 }
 
 // ---------- studio time ----------
@@ -2235,6 +2363,20 @@ const ACTIONS = {
   // 2. job board
   'request-new': () => hireModal({ request: true }),
   'label-job-new': () => labelJobModal(),
+  remind: (el) => act(async () => {
+    const r = await api('POST', `/api/games/${S.gameId}/reminders`, { contractIds: el.dataset.ids.split(',').map(Number) });
+    if (!r.sent.length) throw new Error(r.skipped[0]?.why || 'Nothing to send');
+    return r;
+  }, 'Reminder sent'),
+  'remind-all': (el) => {
+    const ids = el.dataset.ids.split(',').map(Number);
+    modal(`${modalHead(`Remind ${plural(ids.length, 'artist')}?`, 'Each artist gets a reminder about their deal: finish the work, sign the offer, or confirm & pay. They see it on every page until they tap Got it. Deals reminded in the last hour are skipped.')}
+      <form data-form="remind-all"><input type="hidden" name="ids" value="${ids.join(',')}" />
+        <label class="field"><span>Add a note (optional)</span><input name="note" maxlength="300" placeholder="Please finish by Friday so we can close out the season." /></label>
+        <div class="modal-foot"><button type="button" class="btn ghost" data-act="close-modal">Cancel</button><button class="btn primary">${icon('bell')}Send reminders</button></div></form>`);
+  },
+  'remind-seen': (el) => act(() => api('POST', `/api/reminders/${el.dataset.id}/seen`)),
+  'remind-hide': () => { store.set(hideKey(), todayKey()); render(); },
   'rate-item-new': (el) => rateItemModal(el.dataset.section || 'payouts', null, el.dataset.then || ''),
   'rate-item-edit': (el) => rateItemModal(el.dataset.section, S.state.rates[el.dataset.section].find((x) => x.id === el.dataset.id)),
   'rate-item-remove': (el) => {
@@ -2548,6 +2690,10 @@ const FORMS = {
   },
   charge: (d, f) => chargeItem(d, f, 'Charged'),
   payout: (d, f) => chargeItem(d, f, 'Paid'),
+  'remind-all': async (d) => {
+    const r = await act(() => api('POST', `/api/games/${S.gameId}/reminders`, { contractIds: d.ids.split(',').map(Number), note: d.note || '' }));
+    if (r) { closeModal(); toast(`${plural(r.sent.length, 'reminder')} sent${r.skipped.length ? ` · ${r.skipped.length} skipped (reminded in the last hour)` : ''}`, 'ok'); }
+  },
   'rate-item': async (d) => {
     const body = { section: d.section, name: d.name, note: d.note || '' };
     if (d.section === 'jobs') Object.assign(body, { unit: d.unit, unitRate: Number(d.unitRate), projectRate: Number(d.projectRate || 0) });

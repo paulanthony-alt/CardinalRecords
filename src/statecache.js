@@ -79,6 +79,8 @@ async function refresh(game) {
   e.likes = await db.all('SELECT l.track_id, l.user_id FROM track_likes l JOIN tracks t ON t.id = l.track_id WHERE t.game_id = ?', gid);
   // Studio time: requests and sessions from the last 30 days on.
   e.bookings = await db.all('SELECT * FROM studio_bookings WHERE game_id = ? AND (starts_at > ? OR status = ?) ORDER BY starts_at', gid, Date.now() - 30 * 86_400_000, 'pending');
+  // Reminders from the last 30 days (owners see when each deal was last nudged; artists see theirs).
+  e.reminders = await db.all('SELECT * FROM reminders WHERE game_id = ? AND created_at > ? ORDER BY id DESC LIMIT 500', gid, Date.now() - 30 * 86_400_000);
   // Calendar dates Record Owners added (small table); no-school days push due dates back.
   e.calendar = await db.all('SELECT * FROM calendar_events WHERE game_id = ? ORDER BY day, time, id', gid);
   e.noSchool = noSchoolSet(e.calendar);

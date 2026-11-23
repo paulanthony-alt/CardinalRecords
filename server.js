@@ -7,6 +7,7 @@ const { loadOwners, usingStartingPin } = require('./src/owners');
 const { ZipWriter, toCsv } = require('./src/zip');
 const { writeBackupPdf, writeReportPdf } = require('./src/backup');
 const SC = require('./src/statecache');
+const SD = require('./src/schooldays');
 const LB = require('./src/lobby');
 const compression = require('compression');
 const G = require('./src/game');
@@ -581,6 +582,9 @@ app.get('/api/games/:gameId/state', auth, async (req, res) => {
         decidedAt: x.decided_at, createdAt: x.created_at,
       };
     }),
+    // Reminders: owners see every one sent (to show when a deal was last nudged); artists see their own.
+    reminders: (e.reminders || []).filter((x) => isOwner || x.user_id === me.id)
+      .map((x) => ({ id: x.id, userId: x.user_id, contractId: x.contract_id, message: x.message, by: x.created_by, at: x.created_at, seenAt: x.seen_at })),
     // Calendar: dates the Record Owners added, for everyone in the season.
     calendar: (e.calendar || []).map((x) => ({ id: x.id, title: x.title, kind: x.kind, day: x.day, endDay: x.end_day, time: x.time, details: x.details, createdAt: x.created_at })),
     challenges: (e.challenges || []).map((c) => {
@@ -1201,6 +1205,53 @@ app.post('/api/contracts/:contractId/action', auth, async (req, res) => {
   res.json({ id: await G.contractAction(req.user, Number(req.params.contractId), req.body) });
 });
 
+// ---------- reminders ----------
+// Owners nudge whoever a deal is waiting on: the artist to sign (offered), to finish the work
+// (active), or the client to confirm & pay (delivered). The artist sees it until they tap "Got it".
+const REMIND_WHO = { offered: 'seller', active: 'seller', delivered: 'buyer' };
+const REMIND_GAP = 60 * 60_000; // one reminder per deal per hour, so a double-click doesn't send two
+app.post('/api/games/:gameId/reminders', auth, ownerOnly, async (req, res) => {
+  const game = await gameFor(req);
+  if (!['active', 'showcase'].includes(game.status)) fail('Reminders can be sent while the season is live or in the Showcase');
+  const ids = Array.isArray(req.body?.contractIds) ? [...new Set(req.body.contractIds.map((x) => int(x, 'Deal')))] : [];
+  if (!ids.length) fail('Pick at least one deal');
+  if (ids.length > 200) fail('Up to 200 deals at once');
+  const note = str(req.body?.note, 'Note', { max: 300 });
+  const sent = []; const skipped = [];
+  const noSchool = (await SC.entryFor(game)).noSchool;
+  await tx(async () => {
+    for (const id of ids) {
+      const c = await db.get('SELECT * FROM contracts WHERE id = ? AND game_id = ?', id, game.id);
+      const who = c && REMIND_WHO[c.status];
+      if (!who) { skipped.push({ id, why: 'Not waiting on an artist' }); continue; }
+      const uid = who === 'seller' ? c.seller_id : c.buyer_id;
+      if (await db.get('SELECT 1 FROM reminders WHERE contract_id = ? AND user_id = ? AND created_at > ?', c.id, uid, Date.now() - REMIND_GAP)) { skipped.push({ id, why: 'Reminded in the last hour' }); continue; }
+      const other = await G.nameOf(who === 'seller' ? c.buyer_id : c.seller_id);
+      let due = '';
+      if (c.status === 'active' && c.due_days && c.approved_at) {
+        const d = G.deadline(c, [], noSchool);
+        due = d.overdue ? ' It is overdue.' : ` It's due ${new Date(d.dueAt).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: SD.SCHOOL_TZ })}.`;
+      }
+      const base = {
+        offered: `${other} wants to hire you for "${c.title}". Sign the contract or decline it.`,
+        active: `Finish your job: "${c.title}" for ${other}, then mark it delivered.${due}`,
+        delivered: `${other} delivered "${c.title}". Check the work, then confirm & pay (or request changes).`,
+      }[c.status];
+      await db.run('INSERT INTO reminders (game_id, user_id, contract_id, message, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        game.id, uid, c.id, `${base}${note ? ` ${note}` : ''}`.slice(0, 600), req.user.id, Date.now());
+      sent.push({ id, userId: uid });
+    }
+  });
+  res.json({ ok: true, sent, skipped });
+});
+
+app.post('/api/reminders/:reminderId/seen', auth, async (req, res) => {
+  const r = await db.get('SELECT * FROM reminders WHERE id = ?', int(req.params.reminderId, 'Reminder'));
+  if (!r || r.user_id !== req.user.id) fail('Reminder not found', 404);
+  if (!r.seen_at) await db.run('UPDATE reminders SET seen_at = ? WHERE id = ?', Date.now(), r.id);
+  res.json({ ok: true });
+});
+
 // ---------- tracks / showcase ----------
 // Artists share a link to their music on a streaming site; the app stores the link, not audio.
 app.post('/api/games/:gameId/tracks', auth, async (req, res) => {
@@ -1390,6 +1441,7 @@ async function purgeSeason(gameId) {
   await db.run('DELETE FROM challenges WHERE game_id = ?', gameId); // entries go with them
   await db.run('DELETE FROM studio_bookings WHERE game_id = ?', gameId);
   await db.run('DELETE FROM calendar_events WHERE game_id = ?', gameId);
+  await db.run('DELETE FROM reminders WHERE game_id = ?', gameId);
   const gone = await db.run(`DELETE FROM users u WHERE u.role = 'player' AND u.game_id = ?
     AND NOT EXISTS (SELECT 1 FROM ledger l WHERE l.user_id = u.id)
     AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.buyer_id = u.id OR c.seller_id = u.id)
