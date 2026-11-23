@@ -887,3 +887,28 @@ input[type=time] { width: 100%; border: 0; border-radius: 0; padding: 5px 8px; b
 button.linkish { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--red); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 button.linkish .i { width: 13px; height: 13px; }
 .callout .btn { margin-left: auto; flex: none; }
+
+/* ---------- reminders ---------- */
+.reminders { margin: 0 0 14px; padding: 0; background: var(--paper); box-shadow: var(--raised); border-left: 5px solid var(--red); }
+.rm-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--chrome); border-bottom: 1px solid var(--rule); }
+.rm-head .btn { margin-left: auto; }
+.reminders ul { list-style: none; margin: 0; padding: 4px 0; }
+.reminders li { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--rule); font-size: 13.5px; }
+.reminders li:last-child { border-bottom: 0; }
+.reminders li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.reminders li > .i { flex: none; }
+.reminders li.rm-over > .i { color: var(--red); }
+.reminders li.rm-soon > .i { color: #8a6d00; }
+.reminders li.rm-teacher { background: #fff8d8; }
+.reminders li.rm-teacher > .i { color: var(--redd); }
+.reminders li.rm-more { justify-content: center; font-size: 12.5px; }
+.reminders li .btn { flex: none; }
+.co-list { display: flex; flex-direction: column; gap: 6px; }
+.co-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; background: var(--paper); box-shadow: var(--sunk); }
+.co-main { flex: 1; min-width: 220px; }
+.co-main a { color: inherit; }
+.co-why { margin-top: 3px; font-size: 13px; }
+.co-last { margin-top: 3px; font-size: 12px; color: var(--dk); display: flex; align-items: center; gap: 4px; }
+.co-last .i { width: 12px; height: 12px; }
+.co-overdue .co-row { border-left: 4px solid var(--red); }
+@media (max-width: 640px) { .reminders li { flex-wrap: wrap; } .reminders li > span { flex-basis: calc(100% - 30px); } }

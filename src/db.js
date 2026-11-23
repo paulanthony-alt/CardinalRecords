@@ -284,6 +284,20 @@ CREATE TABLE IF NOT EXISTS calendar_events (
   updated_at  BIGINT  NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_calendar_game ON calendar_events(game_id, day);
+
+-- Reminders a Record Owner sends an artist about a deal (finish the work, sign, confirm & pay).
+-- The artist sees it on every page until they tap "Got it" (seen_at).
+CREATE TABLE IF NOT EXISTS reminders (
+  id          SERIAL  PRIMARY KEY,
+  game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL,
+  contract_id INTEGER,
+  message     TEXT    NOT NULL,
+  created_by  INTEGER,
+  created_at  BIGINT  NOT NULL,
+  seen_at     BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_game ON reminders(game_id, user_id);
 `;
 
 // Statements inside tx() run on that transaction's client; everything else uses the pool.

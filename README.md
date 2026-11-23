@@ -107,6 +107,26 @@ Owners can add their own items to a season's rate sheet with **Add to rate sheet
 
 Each item has a name (no duplicates on the sheet) and an optional description. New jobs and label pay are announced in the lobby (can be turned off); fees aren't. Added items are marked **Added** on the Rate Sheet with **Edit** and **Remove**. Their amounts can also be changed with the rest of the sheet in Admin -> Rate sheet. Changes apply to new deals, label jobs and charges; ones already made keep their amount. **Remove** takes an item off the sheet for new use, but old deals, label jobs and payments keep its name, and a label job already posted can still be paid. Added items belong to one season, and are in the data download and backups.
 
+## Reminders and closing out deals
+
+**Artists** get a **Reminders** box at the top of every page:
+- **Automatic**, worked out live from their deals:
+  - work that's overdue, due today or due tomorrow ("finish your job");
+  - deliveries waiting for them to confirm & pay;
+  - offers waiting for them to sign.
+- **From a teacher**: sent with **Remind** (below). These stay until the artist taps **Got it**.
+- **Hide for today** hides the automatic ones, except work that's overdue or due today.
+
+**Owners** get **Admin -> Close out deals** (also the **Close out** count in the admin bar). It lists the deals that are stuck, each saying who it's waiting on:
+- **Overdue**: past the due date and not delivered.
+- **Delivered, not confirmed**: delivered 2+ days ago and not confirmed.
+- **Offers nobody signed**: offered 2+ days ago and not signed.
+- **Still open after the season ended**: once the season ends, every deal still open is listed, and HQ shows a banner to close them out.
+
+Each row has **Remind** plus **Pay out** (delivered) or **Void & refund** (unsigned), and **Open** for the late fee or "work not done". **Remind everyone** (or **Remind all** per group) sends each artist a reminder about their deal, with an optional note. Reminders go to whoever the deal is waiting on: the artist for sign and finish, the client for confirm & pay. One per deal per hour, so a double-click doesn't send two. Rows show when the artist was last reminded and whether they've seen it.
+
+Reminders aren't posted in the lobby, and offloading a season deletes them.
+
 ## Deal deadlines
 
 A deal's "due in X days" counts **school days**: weekends don't count. It starts the day the label approves the deal, and work is due by the end of the Xth weekday (11:59 PM school time). Approved Friday with 1 day is due at the end of Monday; approved on a weekend, counting starts Monday. School time is `America/New_York`, which can be changed with the `SCHOOL_TZ` environment variable. **No-school days** on the Calendar are skipped too. Deals show **Due in N days**, **Overdue**, **On time** or **Delivered late**. Overdue deals are counted in the admin bar, and owners get a **Charge the late fee** button on late deals (still once per deal).
